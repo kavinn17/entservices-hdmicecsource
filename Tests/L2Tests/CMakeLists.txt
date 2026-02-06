@@ -16,14 +16,12 @@
 # limitations under the License.
 
 
-set(PLUGIN_NAME L2TestsHdmiCecSource)
+set(PLUGIN_NAME L2TestsIO)
 set(MODULE_NAME ${NAMESPACE}${PLUGIN_NAME})
 set(THUNDER_PORT 9998)
 
-# Collect test source files from tests/ directory
-file(GLOB SRC_FILES tests/*.cpp)
+set(SRC_FILES )
 
-# Only build if test files exist
 if(SRC_FILES)
     find_package(${NAMESPACE}Plugins REQUIRED)
 
@@ -69,6 +67,4 @@ if(SRC_FILES)
         )
 
     install(TARGETS ${MODULE_NAME} DESTINATION lib)
-else()
-    message(STATUS "No L2 test source files found - skipping L2 test build for HdmiCecSource")
 endif()

@@ -96,6 +96,7 @@ mkdir -p headers/rdk/ds
 mkdir -p headers/rdk/iarmbus
 mkdir -p headers/ccec
 mkdir -p headers/websocket
+mkdir -p headers/helpers
 echo "dir created successfully"
 echo "======================================================================================"
 
@@ -119,6 +120,9 @@ touch rdk/ds/manager.hpp
 touch rdk/ds/videoOutputPort.hpp
 # IARM headers
 touch rdk/iarmbus/libIARM.h
+touch rdk/iarmbus/libIBus.h
+# Helper headers
+touch helpers/PowerManagerInterface.h
 # Websocket headers
 touch websocket/URL.h
 echo "files created successfully"

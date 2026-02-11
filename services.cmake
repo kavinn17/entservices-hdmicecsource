@@ -20,7 +20,3 @@
 # Note: This file is kept minimal as the HdmiCecSource plugin does not use
 # most of the legacy RDK service flags
 #
-
-# Plugin options (kept for build system compatibility)
-option(PLUGIN_TELEMETRY "PLUGIN_TELEMETRY" ON)
-option(PLUGIN_CONTINUEWATCHING "PLUGIN_CONTINUEWATCHING" ON)

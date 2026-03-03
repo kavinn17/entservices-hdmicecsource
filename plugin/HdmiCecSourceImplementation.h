@@ -284,7 +284,8 @@ namespace WPEFramework {
             HdmiCecSourceProcessor *msgProcessor;
             HdmiCecSourceFrameListener *msgFrameListener;
             void InitializePowerManager(PluginHost::IShell *service);
-            const void InitializeIARM();
+            // Coverity fix: Remove redundant const from void return type
+            void InitializeIARM();
             void DeinitializeIARM();
             static void dsHdmiEventHandler(const char *owner, IARM_EventId_t eventId, void *data, size_t len);
             void onHdmiHotPlug(int connectStatus);

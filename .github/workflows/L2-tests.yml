@@ -17,7 +17,7 @@ env:
   INTERFACES_REF: "develop"
   AUTOMATICS_UNAME: ${{ secrets.AUTOMATICS_UNAME}}
   AUTOMATICS_PASSCODE: ${{ secrets. AUTOMATICS_PASSCODE}}
-  RDK_SERVICE_L2_TEST: "OFF"
+  RDK_SERVICE_L2_TEST: "ON"
 
 jobs:
   L2-tests:
@@ -553,7 +553,7 @@ jobs:
           -I $GITHUB_WORKSPACE/entservices-testframework/Tests/headers/rdk/iarmmgrs-hal
           -I $GITHUB_WORKSPACE/entservices-testframework/Tests/headers/systemservices
           -I $GITHUB_WORKSPACE/entservices-testframework/Tests/headers/systemservices/proc
-          -I $GITHUB_WORKSPACE/entservices-deviceanddisplay/helpers
+          -I $GITHUB_WORKSPACE/entservices-hdmicecsource/helpers
           -I $GITHUB_WORKSPACE/install/usr/include
           -I $GITHUB_WORKSPACE/install/usr/include/WPEFramework
           -I ./usr/include/libdrm

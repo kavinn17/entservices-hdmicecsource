@@ -35,6 +35,8 @@
 #include "UtilssyncPersistFile.h"
 #include "UtilsSearchRDKProfile.h"
 
+#include <telemetry_busmessage_sender.h>
+
 #define HDMICECSOURCE_METHOD_SET_ENABLED "SetEnabled"
 #define HDMICECSOURCE_METHOD_GET_ENABLED "GetEnabled"
 #define HDMICECSOURCE_METHOD_OTP_SET_ENABLED "SetOTPEnabled"
@@ -207,6 +209,11 @@ namespace WPEFramework
        void HdmiCecSourceProcessor::process (const SetOSDName &msg, const Header &header)
        {
              LOGINFO("Command: SetOSDName OSDName : %s\n",msg.osdName.toString().c_str());
+
+		   	 std::string OSDName_string = msg.osdName.toString()
+		   	 std::string value = "Command: SetOSDName OSDName : " + OSDName_string;
+             t2_event_s("HDMI_DeviceInfo_split", (char*)value.c_str());
+		   
              if (HdmiCecSourceImplementation::_instance) {
                  bool isOSDNameUpdated = HdmiCecSourceImplementation::_instance->deviceList[header.from.toInt()].update(msg.osdName);
                  if (isOSDNameUpdated)

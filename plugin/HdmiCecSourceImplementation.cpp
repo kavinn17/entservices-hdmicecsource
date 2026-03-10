@@ -210,7 +210,7 @@ namespace WPEFramework
        {
              LOGINFO("Command: SetOSDName OSDName : %s\n",msg.osdName.toString().c_str());
 
-		   	 std::string OSDName_string = msg.osdName.toString()
+		   	 std::string OSDName_string = msg.osdName.toString();
 		   	 std::string value = "Command: SetOSDName OSDName : " + OSDName_string;
              t2_event_s("HDMI_DeviceInfo_split", (char*)value.c_str());
 		   

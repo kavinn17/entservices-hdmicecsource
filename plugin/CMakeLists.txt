@@ -60,7 +60,7 @@ set_target_properties(${PLUGIN_IMPLEMENTATION} PROPERTIES
 find_package(DS)
 find_package(IARMBus)
 find_package(CEC)
-
+find_package(Telemetry)
 
 target_include_directories(${PLUGIN_IMPLEMENTATION} PRIVATE ${IARMBUS_INCLUDE_DIRS} ../helpers)
 target_include_directories(${PLUGIN_IMPLEMENTATION} PRIVATE ${CEC_INCLUDE_DIRS})
@@ -72,8 +72,12 @@ target_link_libraries(${PLUGIN_IMPLEMENTATION} PUBLIC ${NAMESPACE}Plugins::${NAM
 target_link_libraries(${PLUGIN_IMPLEMENTATION}
     PRIVATE
         CompileSettingsDebug::CompileSettingsDebug
-        ${NAMESPACE}Plugins::${NAMESPACE}Plugins
-        -ltelemetry_msgsender)
+        ${NAMESPACE}Plugins::${NAMESPACE}Plugins)
+
+if(TELEMETRY_FOUND)
+    target_link_libraries(${MODULE_NAME} PRIVATE ${TELEMETRY_LIBRARIES})
+    target_include_directories(${MODULE_NAME} PRIVATE ${TELEMETRY_INCLUDE_DIRS})
+endif()
 
 if (NOT RDK_SERVICES_L1_TEST)
     target_compile_options(${PLUGIN_IMPLEMENTATION} PRIVATE -Wno-error=deprecated)

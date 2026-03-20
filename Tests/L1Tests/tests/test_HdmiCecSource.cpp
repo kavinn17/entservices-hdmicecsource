@@ -41,6 +41,7 @@
 #include "HdmiCecSourceMock.h"
 #include "WorkerPoolImplementation.h"
 #include "WrapsMock.h"
+#include "TelemetryMock.h"
 
 #define JSON_TIMEOUT   (1000)
 #define CEC_SETTING_ENABLED_FILE "/opt/persistent/ds/cecData_2.json"
@@ -304,6 +305,7 @@ protected:
     WrapsImplMock *p_wrapsImplMock = nullptr;
     ServiceMock  *p_serviceMock  = nullptr;
     HdmiCecSourceMock       *p_hdmiCecSourceMock = nullptr;
+    TelemetryApiImplMock *p_telemetryApiImplMock = nullptr;
     testing::NiceMock<COMLinkMock> comLinkMock;
     testing::NiceMock<ServiceMock> service;
     Core::ProxyType<WorkerPoolImplementation> workerPool;
@@ -348,6 +350,9 @@ protected:
         p_wrapsImplMock = new NiceMock <WrapsImplMock>;
 
         Wraps::setImpl(p_wrapsImplMock);
+
+        p_telemetryApiImplMock = new NiceMock<TelemetryApiImplMock>;
+        TelemetryApi::setImpl(p_telemetryApiImplMock);
 
         ON_CALL(*p_hdmiCecSourceMock, Register(::testing::_))
         .WillByDefault(::testing::Invoke(
@@ -465,6 +470,13 @@ protected:
         {
             delete p_wrapsImplMock;
             p_wrapsImplMock = nullptr;
+        }
+
+        TelemetryApi::setImpl(nullptr);
+        if (p_telemetryApiImplMock != nullptr)
+        {
+            delete p_telemetryApiImplMock;
+            p_telemetryApiImplMock = nullptr;
         }
     }
 };

@@ -125,6 +125,7 @@ touch rdk/iarmbus/libIBus.h
 touch helpers/PowerManagerInterface.h
 # Websocket headers
 touch websocket/URL.h
+touch telemetry_busmessage_sender.h
 echo "files created successfully"
 echo "======================================================================================"
 

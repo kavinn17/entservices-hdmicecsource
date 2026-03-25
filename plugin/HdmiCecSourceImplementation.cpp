@@ -1536,7 +1536,7 @@ namespace WPEFramework
 						if (!HdmiCecSourceImplementation::_instance->deviceList[i].m_isOSDNameUpdated){
 							iCounter = 0;
 							while ((!_instance->m_updateThreadExit) && (iCounter < (2*10))) { //sleep for 2sec.
-                                                                /* coverity[sleep : FALSE] */
+                                /* coverity[sleep : FALSE] */
 								usleep (100 * 1000); //sleep for 100 milli sec
 								iCounter ++;
 							}
@@ -1551,7 +1551,7 @@ namespace WPEFramework
 						if (!HdmiCecSourceImplementation::_instance->deviceList[i].m_isVendorIDUpdated){
 							iCounter = 0;
 							while ((!_instance->m_updateThreadExit) && (iCounter < (2*10))) { //sleep for 1sec.
-                                                                /* coverity[sleep : FALSE] */
+                                /* coverity[sleep : FALSE] */
 								usleep (100 * 1000); //sleep for 100 milli sec
 								iCounter ++;
 							}

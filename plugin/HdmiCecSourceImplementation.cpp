@@ -984,7 +984,6 @@ namespace WPEFramework
 			catch (const std::bad_alloc& e)
             {
                 LOGERR("Memory allocation failed: %s", e.what());
-                return;
             }
             smConnection->open();
             msgProcessor = new HdmiCecSourceProcessor(*smConnection);

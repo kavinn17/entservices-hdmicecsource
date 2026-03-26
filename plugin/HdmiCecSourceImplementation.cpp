@@ -992,18 +992,25 @@ namespace WPEFramework
             }
 
             cecEnableStatus = true;
-            LOGINFO("Command: sending GiveDevicePowerStatus \r\n");
-            smConnection->sendTo(LogicalAddress::TV, MessageEncoder().encode(GiveDevicePowerStatus()));
-            LOGINFO("Command: sending request active Source isDeviceActiveSource is set to false\r\n");
-            smConnection->sendTo(LogicalAddress::BROADCAST, MessageEncoder().encode(RequestActiveSource()));
-            isDeviceActiveSource = false;
-            LOGINFO("Command: GiveDeviceVendorID sending VendorID response :%s\n", \
-                                        (isLGTvConnected)?lgVendorId.toString().c_str():appVendorId.toString().c_str());
-            if(isLGTvConnected)
-                smConnection->sendTo(LogicalAddress(LogicalAddress::BROADCAST), MessageEncoder().encode(DeviceVendorID(lgVendorId)));
-            else 
-                smConnection->sendTo(LogicalAddress(LogicalAddress::BROADCAST), MessageEncoder().encode(DeviceVendorID(appVendorId)));
-
+            try
+            {
+                LOGINFO("Command: sending GiveDevicePowerStatus \r\n");
+                smConnection->sendTo(LogicalAddress::TV, MessageEncoder().encode(GiveDevicePowerStatus()));
+                LOGINFO("Command: sending request active Source isDeviceActiveSource is set to false\r\n");
+                smConnection->sendTo(LogicalAddress::BROADCAST, MessageEncoder().encode(RequestActiveSource()));
+                isDeviceActiveSource = false;
+                LOGINFO("Command: GiveDeviceVendorID sending VendorID response :%s\n", \
+                                            (isLGTvConnected)?lgVendorId.toString().c_str():appVendorId.toString().c_str());
+                if(isLGTvConnected)
+                    smConnection->sendTo(LogicalAddress(LogicalAddress::BROADCAST), MessageEncoder().encode(DeviceVendorID(lgVendorId)));
+                else 
+                    smConnection->sendTo(LogicalAddress(LogicalAddress::BROADCAST), MessageEncoder().encode(DeviceVendorID(appVendorId)));
+			}
+            catch(...)
+            {
+                LOGWARN("Exception while sending CEC messages during CECEnable");
+            }
+			
             LOGWARN("Start Update thread %p", smConnection );
             m_updateThreadExit = false;
             _instance->m_lockUpdate = PTHREAD_MUTEX_INITIALIZER;

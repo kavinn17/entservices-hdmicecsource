@@ -1031,7 +1031,7 @@ namespace WPEFramework
                 LOGERR("exception in creating threadRun %s", e.what());
 	        }
 
-        return;
+            return;
         }
 
         void HdmiCecSourceImplementation::CECDisable(void)

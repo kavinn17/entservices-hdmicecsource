@@ -1141,8 +1141,7 @@ namespace WPEFramework
             try{
                 LogicalAddress addr = LibCCEC::getInstance().getLogicalAddress(DEV_TYPE_TUNER);
 
-                /* coverity[UNINIT : FALSE] */
-                std::string logicalAddrDeviceType = DeviceType(LogicalAddress(addr).getType()).toString().c_str();
+                std::string logicalAddrDeviceType = DeviceType(LogicalAddress(addr).getType()).toString();
 
                 LOGINFO("logical address obtained is %d , saved logical address is %d ", addr.toInt(), logicalAddress.toInt());
 
@@ -1552,7 +1551,7 @@ namespace WPEFramework
 
 						if (!HdmiCecSourceImplementation::_instance->deviceList[i].m_isVendorIDUpdated){
 							iCounter = 0;
-							while ((!_instance->m_updateThreadExit) && (iCounter < (2*10))) { //sleep for 1sec.
+							while ((!_instance->m_updateThreadExit) && (iCounter < (2*10))) { //sleep for 2sec.
                                 /* coverity[sleep : FALSE] */
 								usleep (100 * 1000); //sleep for 100 milli sec
 								iCounter ++;

@@ -1006,9 +1006,107 @@ namespace WPEFramework
                 // Ensure any background threads know initialization failed.
                 m_updateThreadExit = true;
                 m_pollThreadExit = true;
+                // Rollback sendKeyEvent thread
+                {
+                    m_sendKeyEventThreadExit = true;
+                    std::unique_lock<std::mutex> lk(m_sendKeyEventMutex);
+                    m_sendKeyEventThreadRun = true;
+                    m_sendKeyCV.notify_one();
+                }
+                try {
+                    if (m_sendKeyEventThread.get().joinable())
+                        m_sendKeyEventThread.get().join();
+                } catch(...) {}
+                // Rollback libcec
+                libcecInitStatus--;
+                if (0 == libcecInitStatus) {
+                    try {
+                        LibCCEC::getInstance().term();
+                    } catch (...) {}
+                }
                 return;
             }
-
+            catch (const std::exception& e)
+            {
+                LOGERR("Exception during CEC initialization: %s", e.what());
+                // Roll back partial initialization to avoid leaks/inconsistent state.
+                cecEnableStatus = false;
+                if (msgFrameListener != nullptr) {
+                    delete msgFrameListener;
+                    msgFrameListener = nullptr;
+                }
+                if (msgProcessor != nullptr) {
+                    delete msgProcessor;
+                    msgProcessor = nullptr;
+                }
+                if (smConnection != nullptr) {
+                    delete smConnection;
+                    smConnection = nullptr;
+                }
+                // Ensure any background threads know initialization failed.
+                m_updateThreadExit = true;
+                m_pollThreadExit = true;
+                // Rollback sendKeyEvent thread
+                {
+                    m_sendKeyEventThreadExit = true;
+                    std::unique_lock<std::mutex> lk(m_sendKeyEventMutex);
+                    m_sendKeyEventThreadRun = true;
+                    m_sendKeyCV.notify_one();
+                }
+                try {
+                    if (m_sendKeyEventThread.get().joinable())
+                        m_sendKeyEventThread.get().join();
+                } catch(...) {}
+                // Rollback libcec
+                libcecInitStatus--;
+                if (0 == libcecInitStatus) {
+                    try {
+                        LibCCEC::getInstance().term();
+                    } catch (...) {}
+                }
+                return;
+            }
+            catch (...)
+            {
+                LOGERR("Unknown exception during CEC initialization");
+                // Roll back partial initialization to avoid leaks/inconsistent state.
+                cecEnableStatus = false;
+                if (msgFrameListener != nullptr) {
+                    delete msgFrameListener;
+                    msgFrameListener = nullptr;
+                }
+                if (msgProcessor != nullptr) {
+                    delete msgProcessor;
+                    msgProcessor = nullptr;
+                }
+                if (smConnection != nullptr) {
+                    delete smConnection;
+                    smConnection = nullptr;
+                }
+                // Ensure any background threads know initialization failed.
+                m_updateThreadExit = true;
+                m_pollThreadExit = true;
+                // Rollback sendKeyEvent thread
+                {
+                    m_sendKeyEventThreadExit = true;
+                    std::unique_lock<std::mutex> lk(m_sendKeyEventMutex);
+                    m_sendKeyEventThreadRun = true;
+                    m_sendKeyCV.notify_one();
+                }
+                try {
+                    if (m_sendKeyEventThread.get().joinable())
+                        m_sendKeyEventThread.get().join();
+                } catch(...) {}
+                // Rollback libcec
+                libcecInitStatus--;
+                if (0 == libcecInitStatus) {
+                    try {
+                        LibCCEC::getInstance().term();
+                    } catch (...) {}
+                }
+                return;
+            }
+			
             cecEnableStatus = true;
             LOGINFO("Command: sending GiveDevicePowerStatus \r\n");
             smConnection->sendTo(LogicalAddress::TV, MessageEncoder().encode(GiveDevicePowerStatus()));

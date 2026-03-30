@@ -980,15 +980,34 @@ namespace WPEFramework
             try
             {
                 smConnection = new Connection(logicalAddress.toInt(),false,"ServiceManager::Connection::");
+                smConnection->open();
+                msgProcessor = new HdmiCecSourceProcessor(*smConnection);
+                msgFrameListener = new HdmiCecSourceFrameListener(*msgProcessor);
+                smConnection->addFrameListener(msgFrameListener);
             }
-			catch (const std::bad_alloc& e)
+            catch (const std::bad_alloc& e)
             {
                 LOGERR("Memory allocation failed: %s", e.what());
+                // Roll back partial initialization to avoid leaks/inconsistent state.
+                cecEnableStatus = false;
+                if (msgFrameListener != nullptr) {
+                    delete msgFrameListener;
+                    msgFrameListener = nullptr;
+                }
+                if (msgProcessor != nullptr) {
+                    delete msgProcessor;
+                    msgProcessor = nullptr;
+                }
+                if (smConnection != nullptr) {
+                    // Connection will be closed as part of its destruction, just delete it.
+                    delete smConnection;
+                    smConnection = nullptr;
+                }
+                // Ensure any background threads know initialization failed.
+                m_updateThreadExit = true;
+                m_pollThreadExit = true;
+                return;
             }
-            smConnection->open();
-            msgProcessor = new HdmiCecSourceProcessor(*smConnection);
-            msgFrameListener = new HdmiCecSourceFrameListener(*msgProcessor);
-            smConnection->addFrameListener(msgFrameListener);
 
             cecEnableStatus = true;
             LOGINFO("Command: sending GiveDevicePowerStatus \r\n");

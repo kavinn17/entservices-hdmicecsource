@@ -977,6 +977,44 @@ namespace WPEFramework
             getPhysicalAddress();
             getLogicalAddress();
 
+            // Rollback helper to avoid code duplication across catch blocks
+            auto rollbackInitialization = [this]() {
+                cecEnableStatus = false;
+                if (msgFrameListener != nullptr) {
+                    delete msgFrameListener;
+                    msgFrameListener = nullptr;
+                }
+                if (msgProcessor != nullptr) {
+                    delete msgProcessor;
+                    msgProcessor = nullptr;
+                }
+                if (smConnection != nullptr) {
+                    delete smConnection;
+                    smConnection = nullptr;
+                }
+                // Ensure any background threads know initialization failed.
+                m_updateThreadExit = true;
+                m_pollThreadExit = true;
+                // Rollback sendKeyEvent thread
+                {
+                    m_sendKeyEventThreadExit = true;
+                    std::unique_lock<std::mutex> lk(m_sendKeyEventMutex);
+                    m_sendKeyEventThreadRun = true;
+                    m_sendKeyCV.notify_one();
+                }
+                try {
+                    if (m_sendKeyEventThread.get().joinable())
+                        m_sendKeyEventThread.get().join();
+                } catch(...) {}
+                // Rollback libcec
+                libcecInitStatus--;
+                if (0 == libcecInitStatus) {
+                    try {
+                        LibCCEC::getInstance().term();
+                    } catch (...) {}
+                }
+            };
+
             try
             {
                 smConnection = new Connection(logicalAddress.toInt(),false,"ServiceManager::Connection::");
@@ -988,122 +1026,19 @@ namespace WPEFramework
             catch (const std::bad_alloc& e)
             {
                 LOGERR("Memory allocation failed: %s", e.what());
-                // Roll back partial initialization to avoid leaks/inconsistent state.
-                cecEnableStatus = false;
-                if (msgFrameListener != nullptr) {
-                    delete msgFrameListener;
-                    msgFrameListener = nullptr;
-                }
-                if (msgProcessor != nullptr) {
-                    delete msgProcessor;
-                    msgProcessor = nullptr;
-                }
-                if (smConnection != nullptr) {
-                    // Connection will be closed as part of its destruction, just delete it.
-                    delete smConnection;
-                    smConnection = nullptr;
-                }
-                // Ensure any background threads know initialization failed.
-                m_updateThreadExit = true;
-                m_pollThreadExit = true;
-                // Rollback sendKeyEvent thread
-                {
-                    m_sendKeyEventThreadExit = true;
-                    std::unique_lock<std::mutex> lk(m_sendKeyEventMutex);
-                    m_sendKeyEventThreadRun = true;
-                    m_sendKeyCV.notify_one();
-                }
-                try {
-                    if (m_sendKeyEventThread.get().joinable())
-                        m_sendKeyEventThread.get().join();
-                } catch(...) {}
-                // Rollback libcec
-                libcecInitStatus--;
-                if (0 == libcecInitStatus) {
-                    try {
-                        LibCCEC::getInstance().term();
-                    } catch (...) {}
-                }
+                rollbackInitialization();
                 return;
             }
             catch (const std::exception& e)
             {
                 LOGERR("Exception during CEC initialization: %s", e.what());
-                // Roll back partial initialization to avoid leaks/inconsistent state.
-                cecEnableStatus = false;
-                if (msgFrameListener != nullptr) {
-                    delete msgFrameListener;
-                    msgFrameListener = nullptr;
-                }
-                if (msgProcessor != nullptr) {
-                    delete msgProcessor;
-                    msgProcessor = nullptr;
-                }
-                if (smConnection != nullptr) {
-                    delete smConnection;
-                    smConnection = nullptr;
-                }
-                // Ensure any background threads know initialization failed.
-                m_updateThreadExit = true;
-                m_pollThreadExit = true;
-                // Rollback sendKeyEvent thread
-                {
-                    m_sendKeyEventThreadExit = true;
-                    std::unique_lock<std::mutex> lk(m_sendKeyEventMutex);
-                    m_sendKeyEventThreadRun = true;
-                    m_sendKeyCV.notify_one();
-                }
-                try {
-                    if (m_sendKeyEventThread.get().joinable())
-                        m_sendKeyEventThread.get().join();
-                } catch(...) {}
-                // Rollback libcec
-                libcecInitStatus--;
-                if (0 == libcecInitStatus) {
-                    try {
-                        LibCCEC::getInstance().term();
-                    } catch (...) {}
-                }
+                rollbackInitialization();
                 return;
             }
             catch (...)
             {
                 LOGERR("Unknown exception during CEC initialization");
-                // Roll back partial initialization to avoid leaks/inconsistent state.
-                cecEnableStatus = false;
-                if (msgFrameListener != nullptr) {
-                    delete msgFrameListener;
-                    msgFrameListener = nullptr;
-                }
-                if (msgProcessor != nullptr) {
-                    delete msgProcessor;
-                    msgProcessor = nullptr;
-                }
-                if (smConnection != nullptr) {
-                    delete smConnection;
-                    smConnection = nullptr;
-                }
-                // Ensure any background threads know initialization failed.
-                m_updateThreadExit = true;
-                m_pollThreadExit = true;
-                // Rollback sendKeyEvent thread
-                {
-                    m_sendKeyEventThreadExit = true;
-                    std::unique_lock<std::mutex> lk(m_sendKeyEventMutex);
-                    m_sendKeyEventThreadRun = true;
-                    m_sendKeyCV.notify_one();
-                }
-                try {
-                    if (m_sendKeyEventThread.get().joinable())
-                        m_sendKeyEventThread.get().join();
-                } catch(...) {}
-                // Rollback libcec
-                libcecInitStatus--;
-                if (0 == libcecInitStatus) {
-                    try {
-                        LibCCEC::getInstance().term();
-                    } catch (...) {}
-                }
+                rollbackInitialization();
                 return;
             }
 			
@@ -1122,8 +1057,8 @@ namespace WPEFramework
 			
             LOGWARN("Start Update thread %p", smConnection );
             m_updateThreadExit = false;
-            _instance->m_lockUpdate = PTHREAD_MUTEX_INITIALIZER;
-            _instance->m_condSigUpdate = PTHREAD_COND_INITIALIZER;
+            pthread_mutex_init(&(_instance->m_lockUpdate), NULL);
+            pthread_cond_init(&(_instance->m_condSigUpdate), NULL);
             try {
                 if (m_UpdateThread.get().joinable()) {
                     m_UpdateThread.get().join();
@@ -1136,8 +1071,8 @@ namespace WPEFramework
             LOGWARN("Start Thread %p", smConnection );
             m_pollThreadExit = false;
             _instance->m_numberOfDevices = 0;
-            _instance->m_lock = PTHREAD_MUTEX_INITIALIZER;
-            _instance->m_condSig = PTHREAD_COND_INITIALIZER;
+            pthread_mutex_init(&(_instance->m_lock), NULL);
+            pthread_cond_init(&(_instance->m_condSig), NULL);
             try {
                 if (m_pollThread.get().joinable()) {
                     m_pollThread.get().join();
@@ -1654,7 +1589,7 @@ namespace WPEFramework
 						if (!HdmiCecSourceImplementation::_instance->deviceList[i].m_isOSDNameUpdated){
 							iCounter = 0;
 							while ((!_instance->m_updateThreadExit) && (iCounter < (2*10))) { //sleep for 2sec.
-                                /* coverity[sleep : FALSE] */
+								/* coverity[sleep : FALSE] */
 								usleep (100 * 1000); //sleep for 100 milli sec
 								iCounter ++;
 							}
@@ -1669,7 +1604,7 @@ namespace WPEFramework
 						if (!HdmiCecSourceImplementation::_instance->deviceList[i].m_isVendorIDUpdated){
 							iCounter = 0;
 							while ((!_instance->m_updateThreadExit) && (iCounter < (2*10))) { //sleep for 2sec.
-                                /* coverity[sleep : FALSE] */
+								/* coverity[sleep : FALSE] */
 								usleep (100 * 1000); //sleep for 100 milli sec
 								iCounter ++;
 							}

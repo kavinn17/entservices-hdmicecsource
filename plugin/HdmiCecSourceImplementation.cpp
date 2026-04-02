@@ -1602,6 +1602,7 @@ namespace WPEFramework
 							iCounter = 0;
 							while ((!_instance->m_updateThreadExit) && (iCounter < (2*10))) { //sleep for 2sec.
 								/* coverity[sleep : FALSE] */
+								/* Delay allows CEC device response time as per HDMI-CEC specification before requesting OSD name */
 								usleep (100 * 1000); //sleep for 100 milli sec
 								iCounter ++;
 							}
@@ -1617,6 +1618,7 @@ namespace WPEFramework
 							iCounter = 0;
 							while ((!_instance->m_updateThreadExit) && (iCounter < (2*10))) { //sleep for 2sec.
 								/* coverity[sleep : FALSE] */
+								/* Delay allows CEC device response time as per HDMI-CEC specification before requesting vendor ID */
 								usleep (100 * 1000); //sleep for 100 milli sec
 								iCounter ++;
 							}

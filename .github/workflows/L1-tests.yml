@@ -707,10 +707,10 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-         name: Build results
-         path: |
-          build/entservices-hdmicecsource/
-          valgrind_log
-          gdb_log.txt
-          gdb_output.log
-          debug_info.log
+          name: Build results
+          path: |
+            build/entservices-hdmicecsource/
+            valgrind_log
+            gdb_log.txt
+            gdb_output.log
+            debug_info.log

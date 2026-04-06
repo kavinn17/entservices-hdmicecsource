@@ -646,7 +646,7 @@ jobs:
           echo "Memory info:" >> $GITHUB_WORKSPACE/debug_info.log
           free -h >> $GITHUB_WORKSPACE/debug_info.log
           echo "Disk space:" >> $GITHUB_WORKSPACE/debug_info.log
-          df -h >> $GITHUB_WORKSPACE/debug_info.log          
+          df -h >> $GITHUB_WORKSPACE/debug_info.log
 
       - name: Run unit tests with valgrind
         if: ${{ !env.ACT && inputs.caller_source != 'testframework' }}
@@ -663,7 +663,7 @@ jobs:
           --fair-sched=try
           RdkServicesL1Test &&
           cp -rf $(pwd)/rdkL1TestResults.json $GITHUB_WORKSPACE/rdkL1TestResultsWithValgrind.json &&
-          rm -rf $(pwd)/rdkL1TestResults.json        
+          rm -rf $(pwd)/rdkL1TestResults.json
 
       - name: Generate coverage
         if: ${{ matrix.coverage == 'with-coverage' && !env.ACT && inputs.caller_source != 'testframework' }}
@@ -709,10 +709,8 @@ jobs:
         with:
          name: Build results
          path: |
-          build/entservices-hdcpprofile/
+          build/entservices-hdmicecsource/
           valgrind_log
           gdb_log.txt
           gdb_output.log
-          debug_info.log          
-          
-
+          debug_info.log

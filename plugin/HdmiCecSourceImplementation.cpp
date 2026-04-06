@@ -980,18 +980,7 @@ namespace WPEFramework
             // Rollback helper to avoid code duplication across catch blocks
             auto rollbackInitialization = [this]() {
                 cecEnableStatus = false;
-                if (msgFrameListener != nullptr) {
-                    delete msgFrameListener;
-                    msgFrameListener = nullptr;
-                }
-                if (msgProcessor != nullptr) {
-                    delete msgProcessor;
-                    msgProcessor = nullptr;
-                }
-                if (smConnection != nullptr) {
-                    delete smConnection;
-                    smConnection = nullptr;
-                }
+                
                 // Ensure any background threads know initialization failed.
                 m_updateThreadExit = true;
                 m_pollThreadExit = true;
@@ -1006,6 +995,20 @@ namespace WPEFramework
                     if (m_sendKeyEventThread.get().joinable())
                         m_sendKeyEventThread.get().join();
                 } catch(...) {}
+
+                if (msgFrameListener != nullptr) {
+                    delete msgFrameListener;
+                    msgFrameListener = nullptr;
+                }
+                if (msgProcessor != nullptr) {
+                    delete msgProcessor;
+                    msgProcessor = nullptr;
+                }
+                if (smConnection != nullptr) {
+                    delete smConnection;
+                    smConnection = nullptr;
+                }
+
                 // Rollback libcec
                 libcecInitStatus--;
                 if (0 == libcecInitStatus) {

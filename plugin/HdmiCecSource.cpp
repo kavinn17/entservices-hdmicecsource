@@ -119,6 +119,8 @@ namespace WPEFramework
              HdmiCecSource::_notification.OnActiveSourceStatusUpdated(false);
              _hdmiCecSource->Unregister(&_notification);
              Exchange::JHdmiCecSource::Unregister(*this);
+             //Added for crash
+             _hdmiCecSource = nullptr;
              _hdmiCecSource->Release();
              _hdmiCecSource = nullptr;
 

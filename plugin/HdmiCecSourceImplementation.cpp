@@ -1023,21 +1023,9 @@ namespace WPEFramework
                 msgFrameListener = new HdmiCecSourceFrameListener(*msgProcessor);
                 smConnection->addFrameListener(msgFrameListener);
             }
-            catch (const std::bad_alloc& e)
-            {
-                LOGERR("Memory allocation failed: %s", e.what());
-                rollbackInitialization();
-                return;
-            }
             catch (const std::exception& e)
             {
                 LOGERR("Exception during CEC initialization: %s", e.what());
-                rollbackInitialization();
-                return;
-            }
-            catch (...)
-            {
-                LOGERR("Unknown exception during CEC initialization");
                 rollbackInitialization();
                 return;
             }
@@ -1058,11 +1046,6 @@ namespace WPEFramework
             }
             catch (const std::exception& e) {
                 LOGERR("Exception while sending initial CEC messages: %s", e.what());
-                rollbackInitialization();
-                return;
-            }
-            catch (...) {
-                LOGERR("Unknown exception while sending initial CEC messages");
                 rollbackInitialization();
                 return;
             }

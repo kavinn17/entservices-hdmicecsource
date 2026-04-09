@@ -977,56 +977,109 @@ namespace WPEFramework
             getPhysicalAddress();
             getLogicalAddress();
 
-            smConnection = new Connection(logicalAddress.toInt(),false,"ServiceManager::Connection::");
-            smConnection->open();
-            msgProcessor = new HdmiCecSourceProcessor(*smConnection);
-            msgFrameListener = new HdmiCecSourceFrameListener(*msgProcessor);
-            smConnection->addFrameListener(msgFrameListener);
+            // Rollback helper to avoid code duplication across catch blocks
+            auto rollbackInitialization = [this]() {
+                cecEnableStatus = false;
+                
+                // Ensure any background threads know initialization failed.
+                m_updateThreadExit = true;
+                m_pollThreadExit = true;
+                // Rollback sendKeyEvent thread
+                {
+                    m_sendKeyEventThreadExit = true;
+                    std::unique_lock<std::mutex> lk(m_sendKeyEventMutex);
+                    m_sendKeyEventThreadRun = true;
+                    m_sendKeyCV.notify_one();
+                }
+                try {
+                    if (m_sendKeyEventThread.get().joinable())
+                        m_sendKeyEventThread.get().join();
+                } catch(...) {}
 
-            cecEnableStatus = true;
+                if (msgFrameListener != nullptr) {
+                    delete msgFrameListener;
+                    msgFrameListener = nullptr;
+                }
+                if (msgProcessor != nullptr) {
+                    delete msgProcessor;
+                    msgProcessor = nullptr;
+                }
+                if (smConnection != nullptr) {
+                    delete smConnection;
+                    smConnection = nullptr;
+                }
 
-            if(smConnection)
+                // Rollback libcec
+                libcecInitStatus--;
+                if (0 == libcecInitStatus) {
+                    try {
+                        LibCCEC::getInstance().term();
+                    } catch (...) {}
+                }
+            };
+
+            try
             {
+                smConnection = new Connection(logicalAddress.toInt(),false,"ServiceManager::Connection::");
+                smConnection->open();
+                msgProcessor = new HdmiCecSourceProcessor(*smConnection);
+                msgFrameListener = new HdmiCecSourceFrameListener(*msgProcessor);
+                smConnection->addFrameListener(msgFrameListener);
+            }
+            catch (const std::exception& e)
+            {
+                LOGERR("Exception during CEC initialization: %s", e.what());
+                rollbackInitialization();
+                return;
+            }
+			
+            try {
+                cecEnableStatus = true;
                 LOGINFO("Command: sending GiveDevicePowerStatus \r\n");
                 smConnection->sendTo(LogicalAddress::TV, MessageEncoder().encode(GiveDevicePowerStatus()));
                 LOGINFO("Command: sending request active Source isDeviceActiveSource is set to false\r\n");
                 smConnection->sendTo(LogicalAddress::BROADCAST, MessageEncoder().encode(RequestActiveSource()));
                 isDeviceActiveSource = false;
                 LOGINFO("Command: GiveDeviceVendorID sending VendorID response :%s\n", \
-                                                 (isLGTvConnected)?lgVendorId.toString().c_str():appVendorId.toString().c_str());
+                                            (isLGTvConnected)?lgVendorId.toString().c_str():appVendorId.toString().c_str());
                 if(isLGTvConnected)
                     smConnection->sendTo(LogicalAddress(LogicalAddress::BROADCAST), MessageEncoder().encode(DeviceVendorID(lgVendorId)));
                 else 
                     smConnection->sendTo(LogicalAddress(LogicalAddress::BROADCAST), MessageEncoder().encode(DeviceVendorID(appVendorId)));
-
-                LOGWARN("Start Update thread %p", smConnection );
-                m_updateThreadExit = false;
-                _instance->m_lockUpdate = PTHREAD_MUTEX_INITIALIZER;
-                _instance->m_condSigUpdate = PTHREAD_COND_INITIALIZER;
-                try {
-                    if (m_UpdateThread.get().joinable()) {
-                       m_UpdateThread.get().join();
-	            }
-                    m_UpdateThread = Utils::ThreadRAII(std::thread(threadUpdateCheck));
-                } catch(const std::system_error& e) {
-                    LOGERR("exception in creating threadUpdateCheck %s", e.what());
-	        }
-
-                LOGWARN("Start Thread %p", smConnection );
-                m_pollThreadExit = false;
-                _instance->m_numberOfDevices = 0;
-                _instance->m_lock = PTHREAD_MUTEX_INITIALIZER;
-                _instance->m_condSig = PTHREAD_COND_INITIALIZER;
-                try {
-                    if (m_pollThread.get().joinable()) {
-                       m_pollThread.get().join();
-	            }
-                    m_pollThread = Utils::ThreadRAII(std::thread(threadRun));
-                } catch(const std::system_error& e) {
-                    LOGERR("exception in creating threadRun %s", e.what());
-	        }
-
             }
+            catch (const std::exception& e) {
+                LOGERR("Exception while sending initial CEC messages: %s", e.what());
+                rollbackInitialization();
+                return;
+            }
+			
+            LOGWARN("Start Update thread %p", smConnection );
+            m_updateThreadExit = false;
+            pthread_mutex_init(&(_instance->m_lockUpdate), NULL);
+            pthread_cond_init(&(_instance->m_condSigUpdate), NULL);
+            try {
+                if (m_UpdateThread.get().joinable()) {
+                    m_UpdateThread.get().join();
+	            }
+                m_UpdateThread = Utils::ThreadRAII(std::thread(threadUpdateCheck));
+            } catch(const std::system_error& e) {
+                LOGERR("exception in creating threadUpdateCheck %s", e.what());
+	        }
+
+            LOGWARN("Start Thread %p", smConnection );
+            m_pollThreadExit = false;
+            _instance->m_numberOfDevices = 0;
+            pthread_mutex_init(&(_instance->m_lock), NULL);
+            pthread_cond_init(&(_instance->m_condSig), NULL);
+            try {
+                if (m_pollThread.get().joinable()) {
+                    m_pollThread.get().join();
+	            }
+                m_pollThread = Utils::ThreadRAII(std::thread(threadRun));
+            } catch(const std::system_error& e) {
+                LOGERR("exception in creating threadRun %s", e.what());
+	        }
+
             return;
         }
 
@@ -1138,7 +1191,7 @@ namespace WPEFramework
             try{
                 LogicalAddress addr = LibCCEC::getInstance().getLogicalAddress(DEV_TYPE_TUNER);
 
-                std::string logicalAddrDeviceType = DeviceType(LogicalAddress(addr).getType()).toString().c_str();
+                std::string logicalAddrDeviceType = DeviceType(LogicalAddress(addr).getType()).toString();
 
                 LOGINFO("logical address obtained is %d , saved logical address is %d ", addr.toInt(), logicalAddress.toInt());
 
@@ -1534,6 +1587,8 @@ namespace WPEFramework
 						if (!HdmiCecSourceImplementation::_instance->deviceList[i].m_isOSDNameUpdated){
 							iCounter = 0;
 							while ((!_instance->m_updateThreadExit) && (iCounter < (2*10))) { //sleep for 2sec.
+								/* Delay allows CEC device response time as per HDMI-CEC specification before requesting OSD name */
+								/* coverity[sleep : FALSE] */
 								usleep (100 * 1000); //sleep for 100 milli sec
 								iCounter ++;
 							}
@@ -1547,7 +1602,9 @@ namespace WPEFramework
 
 						if (!HdmiCecSourceImplementation::_instance->deviceList[i].m_isVendorIDUpdated){
 							iCounter = 0;
-							while ((!_instance->m_updateThreadExit) && (iCounter < (2*10))) { //sleep for 1sec.
+							while ((!_instance->m_updateThreadExit) && (iCounter < (2*10))) { //sleep for 2sec.
+								/* Delay allows CEC device response time as per HDMI-CEC specification before requesting vendor ID */
+								/* coverity[sleep : FALSE] */
 								usleep (100 * 1000); //sleep for 100 milli sec
 								iCounter ++;
 							}

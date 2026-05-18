@@ -37,7 +37,7 @@ set_target_properties(${MODULE_NAME} PROPERTIES
         CXX_STANDARD 11
         CXX_STANDARD_REQUIRED YES)
 
-target_include_directories(${MODULE_NAME} ../helpers)
+target_include_directories(${MODULE_NAME} PRIVATE ../helpers)
 
 target_link_libraries(${MODULE_NAME}
     PRIVATE
@@ -60,7 +60,7 @@ set_target_properties(${PLUGIN_IMPLEMENTATION} PROPERTIES
 find_package(CEC)
 find_package(Telemetry)
 
-target_include_directories(${PLUGIN_IMPLEMENTATION} ../helpers)
+target_include_directories(${PLUGIN_IMPLEMENTATION} PRIVATE ../helpers)
 target_include_directories(${PLUGIN_IMPLEMENTATION} PRIVATE ${CEC_INCLUDE_DIRS})
 target_include_directories(${PLUGIN_IMPLEMENTATION} PRIVATE ${DS_INCLUDE_DIRS})
 

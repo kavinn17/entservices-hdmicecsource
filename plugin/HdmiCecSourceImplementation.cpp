@@ -363,7 +363,7 @@ namespace WPEFramework
                _powerManagerPlugin.Reset();
            }
            _registeredEventHandlers = false;
-           device::Host::getInstance().UnRegister(baseInterface<device::Host::IDisplayDeviceEvents>());
+           //device::Host::getInstance().UnRegister(baseInterface<device::Host::IDisplayDeviceEvents>());
     }
 
     Core::hresult HdmiCecSourceImplementation::Configure(PluginHost::IShell* service)
@@ -389,22 +389,22 @@ namespace WPEFramework
             try
             {
                 //TODO(MROLLINS) this is probably per process so we either need to be running in our own process or be carefull no other plugin is calling it
-                device::Manager::Initialize();
-                device::Host::getInstance().Register(baseInterface<device::Host::IDisplayDeviceEvents>(), "WPE::CecSource");
+                //device::Manager::Initialize();
+                //device::Host::getInstance().Register(baseInterface<device::Host::IDisplayDeviceEvents>(), "WPE::CecSource");
 
-                std::string strVideoPort = device::Host::getInstance().getDefaultVideoPortName();
-                device::VideoOutputPort vPort = device::Host::getInstance().getVideoOutputPort(strVideoPort.c_str());
-                if (vPort.isDisplayConnected())
-                {
-                    std::vector<uint8_t> edidVec;
-                    vPort.getDisplay().getEDIDBytes(edidVec);
-                    //Set LG vendor id if connected with LG TV
-                    if(edidVec.at(8) == 0x1E && edidVec.at(9) == 0x6D)
-                    {
-                        isLGTvConnected = true;
-                    }
-                    LOGINFO("manufacturer byte from edid :%x: %x  isLGTvConnected :%d",edidVec.at(8),edidVec.at(9),isLGTvConnected);
-                }
+                //std::string strVideoPort = device::Host::getInstance().getDefaultVideoPortName();
+                //device::VideoOutputPort vPort = device::Host::getInstance().getVideoOutputPort(strVideoPort.c_str());
+                // if (vPort.isDisplayConnected())
+                // {
+                //     std::vector<uint8_t> edidVec;
+                //     vPort.getDisplay().getEDIDBytes(edidVec);
+                //     //Set LG vendor id if connected with LG TV
+                //     if(edidVec.at(8) == 0x1E && edidVec.at(9) == 0x6D)
+                //     {
+                //         isLGTvConnected = true;
+                //     }
+                //     LOGINFO("manufacturer byte from edid :%x: %x  isLGTvConnected :%d",edidVec.at(8),edidVec.at(9),isLGTvConnected);
+                // }
              }
              catch(...)
              {
@@ -749,19 +749,19 @@ namespace WPEFramework
                 getLogicalAddress();
                 try
                 {
-                   std::string strVideoPort = device::Host::getInstance().getDefaultVideoPortName();
-                   device::VideoOutputPort vPort = device::Host::getInstance().getVideoOutputPort(strVideoPort.c_str());
-                   if (vPort.isDisplayConnected())
-                   {
-                     std::vector<uint8_t> edidVec;
-                     vPort.getDisplay().getEDIDBytes(edidVec);
-                     //Set LG vendor id if connected with LG TV
-                     if(edidVec.at(8) == 0x1E && edidVec.at(9) == 0x6D)
-                     {
-                         isLGTvConnected = true;
-                     }
-                     LOGINFO("manufacturer byte from edid :%x: %x  isLGTvConnected :%d",edidVec.at(8),edidVec.at(9),isLGTvConnected);
-                   }
+                   // std::string strVideoPort = device::Host::getInstance().getDefaultVideoPortName();
+                   // device::VideoOutputPort vPort = device::Host::getInstance().getVideoOutputPort(strVideoPort.c_str());
+                   // if (vPort.isDisplayConnected())
+                   // {
+                   //   std::vector<uint8_t> edidVec;
+                   //   vPort.getDisplay().getEDIDBytes(edidVec);
+                   //   //Set LG vendor id if connected with LG TV
+                   //   if(edidVec.at(8) == 0x1E && edidVec.at(9) == 0x6D)
+                   //   {
+                   //       isLGTvConnected = true;
+                   //   }
+                   //   LOGINFO("manufacturer byte from edid :%x: %x  isLGTvConnected :%d",edidVec.at(8),edidVec.at(9),isLGTvConnected);
+                   // }
                  }
                  catch(...)
                  {

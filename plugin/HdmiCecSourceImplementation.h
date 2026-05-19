@@ -42,7 +42,8 @@
 #include <interfaces/IPowerManager.h>
 #include "PowerManagerInterface.h"
 #include <interfaces/IHdmiCecSource.h>
-#include "host.hpp"
+// removed host.hpp this provided by devicesettings
+//#include "host.hpp"
 
 
 using namespace WPEFramework;

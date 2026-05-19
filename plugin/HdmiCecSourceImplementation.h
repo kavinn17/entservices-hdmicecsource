@@ -188,7 +188,7 @@ namespace WPEFramework {
         public:
             HdmiCecSourceImplementation();
             virtual ~HdmiCecSourceImplementation();
-            virtual void OnDisplayHDMIHotPlug(dsDisplayEvent_t displayEvent) override;
+            //virtual void OnDisplayHDMIHotPlug(dsDisplayEvent_t displayEvent) override;
             void onPowerModeChanged(const PowerState currentState, const PowerState newState);
             void registerEventHandlers();
             static HdmiCecSourceImplementation* _instance;

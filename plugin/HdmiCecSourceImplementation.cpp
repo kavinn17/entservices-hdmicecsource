@@ -747,26 +747,26 @@ namespace WPEFramework
                 LOGINFO ("onHdmiHotPlug Status : %d ", connectStatus);
                 getPhysicalAddress();
                 getLogicalAddress();
-                try
-                {
-                   // std::string strVideoPort = device::Host::getInstance().getDefaultVideoPortName();
-                   // device::VideoOutputPort vPort = device::Host::getInstance().getVideoOutputPort(strVideoPort.c_str());
-                   // if (vPort.isDisplayConnected())
-                   // {
-                   //   std::vector<uint8_t> edidVec;
-                   //   vPort.getDisplay().getEDIDBytes(edidVec);
-                   //   //Set LG vendor id if connected with LG TV
-                   //   if(edidVec.at(8) == 0x1E && edidVec.at(9) == 0x6D)
-                   //   {
-                   //       isLGTvConnected = true;
-                   //   }
-                   //   LOGINFO("manufacturer byte from edid :%x: %x  isLGTvConnected :%d",edidVec.at(8),edidVec.at(9),isLGTvConnected);
-                   // }
-                 }
-                 catch(...)
-                 {
-                    LOGWARN("Exception in getting edid info .\r\n");
-                 }
+                // try
+                // {
+                //    // std::string strVideoPort = device::Host::getInstance().getDefaultVideoPortName();
+                //    // device::VideoOutputPort vPort = device::Host::getInstance().getVideoOutputPort(strVideoPort.c_str());
+                //    // if (vPort.isDisplayConnected())
+                //    // {
+                //    //   std::vector<uint8_t> edidVec;
+                //    //   vPort.getDisplay().getEDIDBytes(edidVec);
+                //    //   //Set LG vendor id if connected with LG TV
+                //    //   if(edidVec.at(8) == 0x1E && edidVec.at(9) == 0x6D)
+                //    //   {
+                //    //       isLGTvConnected = true;
+                //    //   }
+                //    //   LOGINFO("manufacturer byte from edid :%x: %x  isLGTvConnected :%d",edidVec.at(8),edidVec.at(9),isLGTvConnected);
+                //    // }
+                //  }
+                //  catch(...)
+                //  {
+                //     LOGWARN("Exception in getting edid info .\r\n");
+                //  }
                  if(smConnection)
                  {
                      try

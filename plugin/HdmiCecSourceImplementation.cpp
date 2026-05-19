@@ -386,8 +386,8 @@ namespace WPEFramework
 
             // load persistence setting
             loadSettings();
-            try
-            {
+            //try
+            //{
                 //TODO(MROLLINS) this is probably per process so we either need to be running in our own process or be carefull no other plugin is calling it
                 //device::Manager::Initialize();
                 //device::Host::getInstance().Register(baseInterface<device::Host::IDisplayDeviceEvents>(), "WPE::CecSource");
@@ -405,11 +405,11 @@ namespace WPEFramework
                 //     }
                 //     LOGINFO("manufacturer byte from edid :%x: %x  isLGTvConnected :%d",edidVec.at(8),edidVec.at(9),isLGTvConnected);
                 // }
-             }
-             catch(...)
-             {
-                 LOGWARN("Exception in getting edid info .\r\n");
-             }
+             // }
+             // catch(...)
+             // {
+             //     LOGWARN("Exception in getting edid info .\r\n");
+             // }
 
              // get power state:
              ASSERT (_powerManagerPlugin);
@@ -706,23 +706,23 @@ namespace WPEFramework
             LOGINFO("Exit threadHotPlugEventHandler \r\n");
         }
 
-       void HdmiCecSourceImplementation::OnDisplayHDMIHotPlug(dsDisplayEvent_t displayEvent)
-       {
-           LOGINFO("HdmiCecSourceImplementation::OnDisplayHDMIHotPlug : displayEvent = %d ", displayEvent);
+      //  void HdmiCecSourceImplementation::OnDisplayHDMIHotPlug(dsDisplayEvent_t displayEvent)
+      //  {
+      //      LOGINFO("HdmiCecSourceImplementation::OnDisplayHDMIHotPlug : displayEvent = %d ", displayEvent);
 
-           if(!HdmiCecSourceImplementation::_instance  || !_instance->cecEnableStatus)
-           {
-			   bool cecEnableStatus = _instance ? _instance->cecEnableStatus : false;
-               LOGINFO("HdmiCecSourceImplementation::OnDisplayHDMIHotPlug failed _instance:%p cecEnableStatus:%d  \r\n", HdmiCecSourceImplementation::_instance, cecEnableStatus);
-               return;
-           }
+      //      if(!HdmiCecSourceImplementation::_instance  || !_instance->cecEnableStatus)
+      //      {
+			   // bool cecEnableStatus = _instance ? _instance->cecEnableStatus : false;
+      //          LOGINFO("HdmiCecSourceImplementation::OnDisplayHDMIHotPlug failed _instance:%p cecEnableStatus:%d  \r\n", HdmiCecSourceImplementation::_instance, cecEnableStatus);
+      //          return;
+      //      }
 
-           int hdmi_hotplug_event = (int) displayEvent;
-           LOGINFO("Received IARM_BUS_DSMGR_EVENT_HDMI_HOTPLUG  event data:%d \r\n", hdmi_hotplug_event);
-           std::thread worker(threadHotPlugEventHandler,hdmi_hotplug_event);
-           worker.detach();
+      //      int hdmi_hotplug_event = (int) displayEvent;
+      //      LOGINFO("Received IARM_BUS_DSMGR_EVENT_HDMI_HOTPLUG  event data:%d \r\n", hdmi_hotplug_event);
+      //      std::thread worker(threadHotPlugEventHandler,hdmi_hotplug_event);
+      //      worker.detach();
 
-       }
+      //  }
 
        void HdmiCecSourceImplementation::onPowerModeChanged(const PowerState currentState, const PowerState newState)
        {

@@ -23,11 +23,12 @@
 #include "ccec/Connection.hpp"
 #include "ccec/CECFrame.hpp"
 #include "ccec/MessageEncoder.hpp"
-#include "host.hpp"
-
-#include "dsDisplay.h"
-#include "videoOutputPort.hpp"
-#include "manager.hpp"
+// removed host.hpp this provided by devicesettings
+//#include "host.hpp"
+// removed dsDisplay.h this provided by devicesettings-hal-headers
+//#include "dsDisplay.h"
+//#include "videoOutputPort.hpp" this provided by devicesettings
+//#include "manager.hpp" this provided by devicesettings hence removed
 #include "websocket/URL.h"
 
 #include "UtilsIarm.h"

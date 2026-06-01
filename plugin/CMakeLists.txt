@@ -57,7 +57,6 @@ set_target_properties(${PLUGIN_IMPLEMENTATION} PROPERTIES
         CXX_STANDARD 11
         CXX_STANDARD_REQUIRED YES)
 
-find_package(DS)
 find_package(IARMBus)
 find_package(CEC)
 find_package(Telemetry)

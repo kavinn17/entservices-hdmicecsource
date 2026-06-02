@@ -26,19 +26,10 @@
 find_package(PkgConfig)
 
 find_library(IARMBUS_LIBRARIES NAMES IARMBus)
+find_path(IARMBUS_INCLUDE_DIRS NAMES libIARM.h PATH_SUFFIXES rdk/iarmbus)
+find_path(IARMRECEIVER_INCLUDE_DIRS NAMES receiverMgr.h PATH_SUFFIXES rdk/iarmmgrs/receiver)
 
-find_path(IARMBUS_INCLUDE_DIRS
-          NAMES libIARM.h
-          PATH_SUFFIXES rdk/iarmbus)
-
-# Optional dependency
-find_path(IARMRECEIVER_INCLUDE_DIRS
-          NAMES receiverMgr.h
-          PATH_SUFFIXES rdk/iarmmgrs/receiver)
-
-set(IARMBUS_LIBRARIES
-    ${IARMBUS_LIBRARIES}
-    CACHE PATH "Path to IARMBus library")
+set(IARMBUS_LIBRARIES ${IARMBUS_LIBRARIES} CACHE PATH "Path to IARMBus library")
 
 # Add receiver include path only if found
 if(IARMRECEIVER_INCLUDE_DIRS)
@@ -51,23 +42,15 @@ else()
     message(WARNING "receiverMgr.h not found, continuing without iarmmgrs support")
 endif()
 
-set(IARMBUS_INCLUDE_DIRS
-    ${IARMBUS_INCLUDE_DIRS}
-    CACHE PATH "Path to IARMBus include")
+set(IARMBUS_INCLUDE_DIRS ${IARMBUS_INCLUDE_DIRS} ${IARMRECEIVER_INCLUDE_DIRS} CACHE PATH "Path to IARMBus include")
 
 include(FindPackageHandleStandardArgs)
 
-FIND_PACKAGE_HANDLE_STANDARD_ARGS(
-    IARMBUS
-    DEFAULT_MSG
-    IARMBUS_INCLUDE_DIRS
-    IARMBUS_LIBRARIES
-)
+FIND_PACKAGE_HANDLE_STANDARD_ARGS(IARMBUS DEFAULT_MSG IARMBUS_INCLUDE_DIRS IARMBUS_LIBRARIES)
 
 mark_as_advanced(
     IARMBUS_FOUND
     IARMBUS_INCLUDE_DIRS
     IARMBUS_LIBRARIES
     IARMBUS_LIBRARY_DIRS
-    IARMBUS_FLAGS
-)
+    IARMBUS_FLAGS)

@@ -10,6 +10,7 @@ extern "C" {
 
 // Minimal dsHAL stubs - just return success codes
 int dsDisplayInit() {
+    std::cout << "akshay dsint" << std::endl;
     return 0;  // Success
 }
 
@@ -30,6 +31,7 @@ int dsGetEDID(void* handle, unsigned char* edid, int* length) {
     if (edid && length && *length >= 256) {
         memset(edid, 0, 256);
         *length = 256;
+        std::cout << "akshay insideedid" << std::endl;
         return 0;  // Success
     }
     return -1;  // Error

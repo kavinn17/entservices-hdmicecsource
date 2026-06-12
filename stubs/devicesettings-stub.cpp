@@ -33,6 +33,7 @@ public:
     
     bool isDisplayConnected() {
         // Mock: always return true (display connected)
+        std::cout << "akshay settings display connected to true from stuc.cpp" << std::endl;
         return true;
     }
     

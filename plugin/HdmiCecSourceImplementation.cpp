@@ -393,8 +393,10 @@ namespace WPEFramework
 
                 std::string strVideoPort = device::Host::getInstance().getDefaultVideoPortName();
                 device::VideoOutputPort vPort = device::Host::getInstance().getVideoOutputPort(strVideoPort.c_str());
+				std::cout << "akshay calling isDisplayConnected from plugin" << std::endl;
                 if (vPort.isDisplayConnected())
                 {
+					std::cout << "akshay inside displayconnected" << std::endl;
                     std::vector<uint8_t> edidVec;
                     vPort.getDisplay().getEDIDBytes(edidVec);
                     //Set LG vendor id if connected with LG TV
@@ -402,6 +404,7 @@ namespace WPEFramework
                     {
                         isLGTvConnected = true;
                     }
+					std::cout << "akshay loginfo inside" << std::endl;
                     LOGINFO("manufacturer byte from edid :%x: %x  isLGTvConnected :%d",edidVec.at(8),edidVec.at(9),isLGTvConnected);
                 }
              }

@@ -1018,6 +1018,10 @@ namespace WPEFramework
                 }
             };
 
+            // Clear stale devices before opening connection to prevent race with incoming CEC messages.
+            removeAllCecDevices();
+            _instance->m_numberOfDevices = 0;
+
             try
             {
                 smConnection = new Connection(logicalAddress.toInt(),false,"ServiceManager::Connection::");
@@ -1068,7 +1072,6 @@ namespace WPEFramework
 
             LOGWARN("Start Thread %p", smConnection );
             m_pollThreadExit = false;
-            _instance->m_numberOfDevices = 0;
             pthread_mutex_init(&(_instance->m_lock), NULL);
             pthread_cond_init(&(_instance->m_condSig), NULL);
             try {
@@ -1339,8 +1342,7 @@ namespace WPEFramework
 		    pthread_mutex_unlock(&(_instance->m_lock));
 
 		    success = true;
-		    LOGINFO("getDeviceListWrapper  m_numberOfDevices :%d \n", HdmiCecSourceImplementation::_instance->m_numberOfDevices);
-            numberofdevices = HdmiCecSourceImplementation::_instance->m_numberOfDevices;
+		    LOGINFO("getDeviceListWrapper cached m_numberOfDevices :%d \n", HdmiCecSourceImplementation::_instance->m_numberOfDevices);
 		    try
 		    {
 		    	int i = 0;
@@ -1357,7 +1359,9 @@ namespace WPEFramework
 		    {
 		    	LOGERR("Exception in api");
 		    	success = false;
+			localDevices.clear();
 		    }
+            numberofdevices = static_cast<uint32_t>(localDevices.size());
             deviceList = (Core::Service<RPC::IteratorType<Exchange::IHdmiCecSource::IHdmiCecSourceDeviceListIterator>>::Create<Exchange::IHdmiCecSource::IHdmiCecSourceDeviceListIterator>(localDevices));
             return Core::ERROR_NONE;
 	    }

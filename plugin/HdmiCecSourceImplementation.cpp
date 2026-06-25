@@ -539,7 +539,7 @@ namespace WPEFramework
 		{
 			_instance->m_numberOfDevices--;
 			_instance->deviceList[logicalAddress].clear();
-			LOGINFO("Cec ligical address remove notification send:  \r\n");
+            LOGINFO("Cec logical address remove notification send:  \r\n");
             std::list<Exchange::IHdmiCecSource::INotification*> notifyList;
             _adminLock.Lock();
             notifyList = _hdmiCecSourceNotifications;
@@ -1028,7 +1028,7 @@ namespace WPEFramework
 
             // Clear stale devices before opening connection to prevent race with incoming CEC messages.
             removeAllCecDevices();
-            _instance->m_numberOfDevices = 0;
+            m_numberOfDevices = 0;
 
             try
             {

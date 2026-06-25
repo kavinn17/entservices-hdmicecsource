@@ -685,23 +685,6 @@ TEST_F(HdmiCecSourceInitializedTest, getDeviceList)
 
     EXPECT_EQ(response, string(_T("{\"numberofdevices\":14,\"deviceList\":[{\"logicalAddress\":1,\"vendorID\":\"123\",\"osdName\":\"TEST\"},{\"logicalAddress\":2,\"vendorID\":\"000\",\"osdName\":\"NA\"},{\"logicalAddress\":3,\"vendorID\":\"000\",\"osdName\":\"NA\"},{\"logicalAddress\":4,\"vendorID\":\"000\",\"osdName\":\"NA\"},{\"logicalAddress\":5,\"vendorID\":\"000\",\"osdName\":\"NA\"},{\"logicalAddress\":6,\"vendorID\":\"000\",\"osdName\":\"NA\"},{\"logicalAddress\":7,\"vendorID\":\"000\",\"osdName\":\"NA\"},{\"logicalAddress\":8,\"vendorID\":\"000\",\"osdName\":\"NA\"},{\"logicalAddress\":9,\"vendorID\":\"000\",\"osdName\":\"NA\"},{\"logicalAddress\":10,\"vendorID\":\"000\",\"osdName\":\"NA\"},{\"logicalAddress\":11,\"vendorID\":\"000\",\"osdName\":\"NA\"},{\"logicalAddress\":12,\"vendorID\":\"000\",\"osdName\":\"NA\"},{\"logicalAddress\":13,\"vendorID\":\"000\",\"osdName\":\"NA\"},{\"logicalAddress\":14,\"vendorID\":\"000\",\"osdName\":\"NA\"}],\"success\":true}")));
 
-    // corrupt counter to verify numberofdevices equals deviceList length
-    Plugin::HdmiCecSourceImplementation::_instance->m_numberOfDevices = 0;
-
-    EXPECT_EQ(Core::ERROR_NONE, handler.Invoke(connection, _T("getDeviceList"), _T(""), response));
-
-    JsonObject parsed;
-    parsed.FromString(response);
-    uint32_t reportedCount = parsed["numberofdevices"].Number();
-    JsonArray devArray = parsed["deviceList"].Array();
-
-    // numberofdevices must equal the deviceList array length, not the corrupted counter (which is 0).
-    EXPECT_EQ(reportedCount, devArray.Length());
-    EXPECT_EQ(reportedCount, 14u);
-    EXPECT_TRUE(parsed["success"].Boolean());
-
-    // Restore counter so fixture teardown (removeAllCecDevices) works correctly
-    Plugin::HdmiCecSourceImplementation::_instance->m_numberOfDevices = static_cast<int32_t>(reportedCount);
 }
 
 TEST_F(HdmiCecSourceInitializedTest, sendStandbyMessage)

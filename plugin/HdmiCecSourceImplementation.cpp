@@ -512,10 +512,14 @@ namespace WPEFramework
 			HdmiCecSourceImplementation::_instance->deviceList[logicalAddress].m_logicalAddress = LogicalAddress(logicalAddress);
 			HdmiCecSourceImplementation::_instance->m_numberOfDevices++;
 			LOGINFO("New cec logical address add notification send:  \r\n");
-            std::list<Exchange::IHdmiCecSource::INotification*>::const_iterator index(_hdmiCecSourceNotifications.begin());
-            while (index != _hdmiCecSourceNotifications.end()) {
-                (*index)->OnDeviceAdded(logicalAddress);
-                index++;
+            std::list<Exchange::IHdmiCecSource::INotification*> notifyList;
+            _adminLock.Lock();
+            notifyList = _hdmiCecSourceNotifications;
+            for (auto* n : notifyList) { n->AddRef(); }
+            _adminLock.Unlock();
+            for (auto* n : notifyList) {
+                n->OnDeviceAdded(logicalAddress);
+                n->Release();
             }
 		}
 		//Two source devices can have same logical address.
@@ -536,10 +540,14 @@ namespace WPEFramework
 			_instance->m_numberOfDevices--;
 			_instance->deviceList[logicalAddress].clear();
 			LOGINFO("Cec ligical address remove notification send:  \r\n");
-            std::list<Exchange::IHdmiCecSource::INotification*>::const_iterator index(_hdmiCecSourceNotifications.begin());
-            while (index != _hdmiCecSourceNotifications.end()) {
-                (*index)->OnDeviceRemoved(logicalAddress);
-                index++;
+            std::list<Exchange::IHdmiCecSource::INotification*> notifyList;
+            _adminLock.Lock();
+            notifyList = _hdmiCecSourceNotifications;
+            for (auto* n : notifyList) { n->AddRef(); }
+            _adminLock.Unlock();
+            for (auto* n : notifyList) {
+                n->OnDeviceRemoved(logicalAddress);
+                n->Release();
             }
 
 		}

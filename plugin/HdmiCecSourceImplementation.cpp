@@ -1367,7 +1367,7 @@ namespace WPEFramework
 		    {
 		    	LOGERR("Exception in api");
 		    	success = false;
-			localDevices.clear();
+			    localDevices.clear();
 		    }
             numberofdevices = static_cast<uint32_t>(localDevices.size());
             deviceList = (Core::Service<RPC::IteratorType<Exchange::IHdmiCecSource::IHdmiCecSourceDeviceListIterator>>::Create<Exchange::IHdmiCecSource::IHdmiCecSourceDeviceListIterator>(localDevices));

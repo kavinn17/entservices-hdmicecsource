@@ -73,6 +73,28 @@ send_key_press_event = (
 )
 
 
+send_key_press_event_invalid_logical = (
+    'curl --max-time 5 '
+    '--header "Content-Type: application/json" '
+    '--request POST '
+    '-d \'{"jsonrpc":"2.0","id":42,'
+    '"method":"org.rdk.HdmiCecSource.sendKeyPressEvent",'
+    '"params":{"logicalAddress":20,"keyCode":65}}\' '
+    'http://127.0.0.1:9998/jsonrpc'
+)
+
+
+send_key_press_event_invalid_key = (
+    'curl --max-time 5 '
+    '--header "Content-Type: application/json" '
+    '--request POST '
+    '-d \'{"jsonrpc":"2.0","id":42,'
+    '"method":"org.rdk.HdmiCecSource.sendKeyPressEvent",'
+    '"params":{"logicalAddress":0,"keyCode":999}}\' '
+    'http://127.0.0.1:9998/jsonrpc'
+)
+
+
 set_enabled_false = (
     'curl --max-time 8 '
     '--header "Content-Type: application/json" '
@@ -123,6 +145,39 @@ set_vendor_id = (
     '-d \'{"jsonrpc":"2.0","id":42,'
     '"method":"org.rdk.HdmiCecSource.setVendorId",'
     '"params":{"vendorid":"0x0019FB"}}\' '
+    'http://127.0.0.1:9998/jsonrpc'
+)
+
+
+set_vendor_id_empty = (
+    'curl --max-time 5 '
+    '--header "Content-Type: application/json" '
+    '--request POST '
+    '-d \'{"jsonrpc":"2.0","id":42,'
+    '"method":"org.rdk.HdmiCecSource.setVendorId",'
+    '"params":{"vendorid":""}}\' '
+    'http://127.0.0.1:9998/jsonrpc'
+)
+
+
+set_vendor_id_invalid_format = (
+    'curl --max-time 5 '
+    '--header "Content-Type: application/json" '
+    '--request POST '
+    '-d \'{"jsonrpc":"2.0","id":42,'
+    '"method":"org.rdk.HdmiCecSource.setVendorId",'
+    '"params":{"vendorid":"INVALID_VENDOR"}}\' '
+    'http://127.0.0.1:9998/jsonrpc'
+)
+
+
+set_vendor_id_out_of_range = (
+    'curl --max-time 5 '
+    '--header "Content-Type: application/json" '
+    '--request POST '
+    '-d \'{"jsonrpc":"2.0","id":42,'
+    '"method":"org.rdk.HdmiCecSource.setVendorId",'
+    '"params":{"vendorid":"0xFFFFFFFFFFFFFFFFFFFFFFFF"}}\' '
     'http://127.0.0.1:9998/jsonrpc'
 )
 

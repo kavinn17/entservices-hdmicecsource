@@ -24,7 +24,22 @@ set(PLUGIN_HDMICECSOURCE_STARTUPORDER "" CACHE STRING "To configure startup orde
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 set_source_files_properties(HdmiCecSource.cpp PROPERTIES COMPILE_FLAGS "-fexceptions")
-set_source_files_properties(HdmiCecSourceImplementation.cpp PROPERTIES COMPILE_FLAGS "-fexceptions")
+
+# -----------------------------------------------------------------------
+# USE_DEVICESETTING_PLUGIN: COM-RPC path via entservices-devicesettings
+# -----------------------------------------------------------------------
+option(USE_DEVICESETTING_PLUGIN
+    "Use DeviceSettings COM-RPC plugin instead of libds for HdmiCecSource" OFF)
+
+if (USE_DEVICESETTING_PLUGIN)
+    add_definitions(-DUSE_DEVICESETTING_PLUGIN)
+    message(STATUS "HdmiCecSource: USE_DEVICESETTING_PLUGIN=ON (COM-RPC via entservices-helpers)")
+    set(IMPL_DIR DS_COMRPC)
+else()
+    set(IMPL_DIR DS_IARM)
+endif()
+
+set_source_files_properties(${IMPL_DIR}/HdmiCecSourceImplementation.cpp PROPERTIES COMPILE_FLAGS "-fexceptions")
 
 find_package(${NAMESPACE}Plugins REQUIRED)
 find_package(${NAMESPACE}Helpers REQUIRED)
@@ -52,7 +67,7 @@ install(TARGETS ${MODULE_NAME}
     DESTINATION lib/${STORAGE_DIRECTORY}/plugins)
 
 add_library(${PLUGIN_IMPLEMENTATION} SHARED
-        HdmiCecSourceImplementation.cpp
+        ${IMPL_DIR}/HdmiCecSourceImplementation.cpp
         Module.cpp)
 
 set_target_properties(${PLUGIN_IMPLEMENTATION} PROPERTIES
@@ -66,10 +81,23 @@ find_package(Telemetry)
 
 target_include_directories(${PLUGIN_IMPLEMENTATION} PRIVATE ${IARMBUS_INCLUDE_DIRS})
 target_include_directories(${PLUGIN_IMPLEMENTATION} PRIVATE ${CEC_INCLUDE_DIRS})
-target_include_directories(${PLUGIN_IMPLEMENTATION} PRIVATE ${DS_INCLUDE_DIRS})
 
-
-target_link_libraries(${PLUGIN_IMPLEMENTATION} PUBLIC ${NAMESPACE}Plugins::${NAMESPACE}Plugins ${IARMBUS_LIBRARIES} ${CEC_LIBRARIES} ${DS_LIBRARIES} ${NAMESPACE}::${NAMESPACE}Helpers)
+if (USE_DEVICESETTING_PLUGIN)
+    find_package(${NAMESPACE}Helpers REQUIRED)
+    target_link_libraries(${PLUGIN_IMPLEMENTATION} PUBLIC
+        ${NAMESPACE}Plugins::${NAMESPACE}Plugins
+        ${IARMBUS_LIBRARIES}
+        ${CEC_LIBRARIES}
+        ${NAMESPACE}::${NAMESPACE}Helpers)
+else()
+    target_include_directories(${PLUGIN_IMPLEMENTATION} PRIVATE ${DS_INCLUDE_DIRS})
+    target_link_libraries(${PLUGIN_IMPLEMENTATION} PUBLIC
+        ${NAMESPACE}Plugins::${NAMESPACE}Plugins
+        ${IARMBUS_LIBRARIES}
+        ${CEC_LIBRARIES}
+        ${DS_LIBRARIES}
+        ${NAMESPACE}::${NAMESPACE}Helpers)
+endif()
 
 target_link_libraries(${PLUGIN_IMPLEMENTATION}
     PRIVATE

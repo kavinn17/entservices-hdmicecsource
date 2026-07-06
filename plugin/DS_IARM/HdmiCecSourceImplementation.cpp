@@ -83,7 +83,6 @@ static bool isLGTvConnected = false;
 
 using namespace WPEFramework;
 
-
 namespace WPEFramework
 {
     namespace Plugin

@@ -100,12 +100,16 @@ namespace WPEFramework
                 size_t len = 0;
 
                 in.getBuffer(&buf, &len);
-                // Ensure we don't overflow the buffer: each byte needs 3 chars ("%02X "), plus null terminator
-                size_t maxBytes = (sizeof(strBuffer) - 1) / 3;
-                size_t safelen = (len > maxBytes) ? maxBytes : len;
+                // Calculate maximum bytes we can safely format (each byte needs 3 chars: "XX ")
+                const size_t maxBytes = (sizeof(strBuffer) - 1) / 3; // Reserve 1 byte for null terminator
+                const size_t safelen = (len > maxBytes) ? maxBytes : len;
 
                 for (size_t i = 0; i < safelen; ++i) {
-                    snprintf(strBuffer + (i * 3), sizeof(strBuffer) - (i * 3), "%02X ", buf[i]);
+                    const size_t remaining = sizeof(strBuffer) - (i * 3);
+                    if (remaining < 4) {
+                        break; // Need at least 4 bytes for "XX " + null terminator
+                    }
+                    snprintf(strBuffer + (i * 3), remaining, "%02X ", static_cast<unsigned int>(buf[i]));
                 }
                 // Ensure null termination
                 strBuffer[sizeof(strBuffer) - 1] = '\0';

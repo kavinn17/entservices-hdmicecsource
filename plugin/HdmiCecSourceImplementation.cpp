@@ -104,8 +104,8 @@ namespace WPEFramework
                 size_t maxBytes = (sizeof(strBuffer) - 1) / 3;
                 size_t safelen = (len > maxBytes) ? maxBytes : len;
 
-                for (unsigned int i = 0; i < safelen; i++) {
-                    snprintf(strBuffer + (i*3), sizeof(strBuffer) - (i*3), "%02X ", (uint8_t) *(buf + i));
+                for (size_t i = 0; i < safelen; ++i) {
+                    snprintf(strBuffer + (i * 3), sizeof(strBuffer) - (i * 3), "%02X ", buf[i]);
                 }
                 // Ensure null termination
                 strBuffer[sizeof(strBuffer) - 1] = '\0';

@@ -337,6 +337,7 @@ namespace WPEFramework
     , _videoPortHandle(-1)
     , _displayHandle(-1)
     , _dsVideoPortNotification(*this)
+    , _dsDisplayHotPlugNotification(*this)
     , _pwrMgrNotification(*this)
     , _registeredEventHandlers(false)
     {
@@ -465,6 +466,8 @@ namespace WPEFramework
                         LOGINFO("OnDeviceSettingsActivated: cached _displayHandle=%d", _displayHandle);
                     }
                 }
+                // Register for HDMI hotplug (both connect and disconnect events)
+                disp->Register(&_dsDisplayHotPlugNotification);
                 disp->Release();
             }
         }
@@ -752,25 +755,9 @@ namespace WPEFramework
             registerEventHandlers();
         }
 
-        void HdmiCecSourceImplementation::threadHotPlugEventHandler(int data)
-        {
-            LOGINFO("entry threadHotPlugEventHandler \r\n");
-            if(!HdmiCecSourceImplementation::_instance)
-                return;
-
-            LOGINFO("Pocessing IARM_BUS_DSMGR_EVENT_HDMI_HOTPLUG  event status:%d \r\n",data);
-            HdmiCecSourceImplementation::_instance->onHdmiHotPlug(data);
-            //Trigger CEC device poll here
-            pthread_mutex_lock(&(_instance->m_lock));
-            pthread_cond_signal(&(_instance->m_condSig));
-            pthread_mutex_unlock(&(_instance->m_lock));
-
-            LOGINFO("Exit threadHotPlugEventHandler \r\n");
-        }
-
-       // OnDisplayHDMIHotPlug is NOT used in the COM-RPC path.
-       // Hotplug is received via DSVideoPortNotification::OnResolutionPostChange
-       // which calls onHdmiHotPlug(HDMI_HOT_PLUG_EVENT_CONNECTED) directly.
+       // HDMI hotplug in the COM-RPC path is handled via DSDisplayHotPlugNotification::OnDisplayHDMIHotPlug
+       // (IDeviceSettingsDisplay::IDisplayHDMIHotPlugNotification), which carries both connect and disconnect.
+       // DSVideoPortNotification::OnResolutionPostChange is kept as a secondary connect-only signal.
 
        void HdmiCecSourceImplementation::onPowerModeChanged(const PowerState currentState, const PowerState newState)
        {
@@ -792,7 +779,7 @@ namespace WPEFramework
        {
             if (HDMI_HOT_PLUG_EVENT_CONNECTED == connectStatus)
             {
-                LOGINFO("onHdmiHotPlug Status : %d (COM-RPC path)", connectStatus);
+                LOGINFO("onHdmiHotPlug Status : %d HDMI Connected (COM-RPC path)", connectStatus);
                 getPhysicalAddress();
                 getLogicalAddress();
 
@@ -842,6 +829,18 @@ namespace WPEFramework
                         LOGWARN("Exception while sending Messages onHdmiHotPlug\n");
                     }
                 }
+            }
+            else
+            {
+                LOGINFO("onHdmiHotPlug Status : %d HDMI Disconnected (COM-RPC path)", connectStatus);
+                // Reset LG TV detection — EDID is no longer valid after disconnect
+                isLGTvConnected = false;
+                // Clear all CEC devices from the network
+                removeAllCecDevices();
+                // Wake the poll thread so it can process the disconnect
+                pthread_mutex_lock(&(_instance->m_lock));
+                pthread_cond_signal(&(_instance->m_condSig));
+                pthread_mutex_unlock(&(_instance->m_lock));
             }
             return;
        }

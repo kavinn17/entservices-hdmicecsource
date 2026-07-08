@@ -275,6 +275,40 @@ namespace WPEFramework {
                 HdmiCecSourceImplementation& _parent;
             };
 
+            // -----------------------------------------------------------------------
+            // Inner notification delegate: IDeviceSettingsDisplay::IDisplayHDMIHotPlugNotification
+            //
+            // Receives OnDisplayHDMIHotPlug(DS_DISPLAY_EVENT_CONNECTED) on HDMI plug-in
+            // and OnDisplayHDMIHotPlug(DS_DISPLAY_EVENT_DISCONNECTED) on unplug.
+            // Registered in OnDeviceSettingsActivated() via disp->Register().
+            // -----------------------------------------------------------------------
+            class DSDisplayHotPlugNotification
+                : public Exchange::IDeviceSettingsDisplay::IDisplayHDMIHotPlugNotification
+            {
+            public:
+                explicit DSDisplayHotPlugNotification(HdmiCecSourceImplementation& parent)
+                    : _parent(parent) {}
+
+                DSDisplayHotPlugNotification(const DSDisplayHotPlugNotification&)            = delete;
+                DSDisplayHotPlugNotification& operator=(const DSDisplayHotPlugNotification&) = delete;
+
+                void OnDisplayHDMIHotPlug(
+                    const Exchange::IDeviceSettingsDisplay::DisplayEvent displayEvent) override
+                {
+                    _parent.onHdmiHotPlug(
+                        (displayEvent == Exchange::IDeviceSettingsDisplay::DS_DISPLAY_EVENT_CONNECTED)
+                            ? 0  /* HDMI_HOT_PLUG_EVENT_CONNECTED */
+                            : 1  /* disconnected */);
+                }
+
+                BEGIN_INTERFACE_MAP(DSDisplayHotPlugNotification)
+                    INTERFACE_ENTRY(Exchange::IDeviceSettingsDisplay::IDisplayHDMIHotPlugNotification)
+                END_INTERFACE_MAP
+
+            private:
+                HdmiCecSourceImplementation& _parent;
+            };
+
             class PowerManagerNotification : public Exchange::IPowerManager::IModeChangedNotification {
             private:
                 PowerManagerNotification(const PowerManagerNotification&) = delete;
@@ -349,7 +383,6 @@ namespace WPEFramework {
             static void threadRun();
             static void threadUpdateCheck();
             static void threadSendKeyEvent();
-            static void threadHotPlugEventHandler(int data);
             static void threadCecDaemonInitHandler();
             static void threadCecStatusUpdateHandler(int data);
             uint32_t sendKeyPressEvent(const int logicalAddress, int keyCode);
@@ -359,7 +392,8 @@ namespace WPEFramework {
             VideoPortConfigStore                             _videoPortConfig;
             int32_t _videoPortHandle { -1 };
             int32_t _displayHandle   { -1 };
-            Core::Sink<DSVideoPortNotification> _dsVideoPortNotification;
+            Core::Sink<DSVideoPortNotification>         _dsVideoPortNotification;
+            Core::Sink<DSDisplayHotPlugNotification>     _dsDisplayHotPlugNotification;
 
             PowerManagerInterfaceRef _powerManagerPlugin;
             Core::Sink<PowerManagerNotification> _pwrMgrNotification;

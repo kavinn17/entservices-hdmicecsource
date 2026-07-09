@@ -428,19 +428,10 @@ namespace WPEFramework
             LOGERR("OnDeviceSettingsActivated: failed to load video port config");
         }
 
-        // Get default video port handle
+        // Video port handles are auto-populated by LoadVideoPortConfig() above
+        // Register for resolution change notifications
         auto* vp = AcquireSubInterface<Exchange::IDeviceSettingsVideoPort>();
         if (vp != nullptr) {
-            VideoPortEntry defaultEntry;
-            if (_vpConfigStore.ResolveByName(_vpConfigStore.GetDefaultVideoPortName(), defaultEntry)) {
-                Core::hresult rc = vp->GetVideoPort(defaultEntry.type, defaultEntry.index, _videoPortHandles[_vpConfigStore.GetDefaultVideoPortName()]);
-                if (rc != Core::ERROR_NONE) {
-                    LOGERR("OnDeviceSettingsActivated: GetVideoPort failed: %u", rc);
-                    _videoPortHandles.clear();
-                } else {
-                    LOGINFO("OnDeviceSettingsActivated: cached _videoPortHandle=%d", getCachedVideoPortHandle(_vpConfigStore.GetDefaultVideoPortName()));
-                }
-            }
             // Register for resolution change (fires on HDMI hotplug)
             vp->Register(&_dsVideoPortNotification);
             vp->Release();
@@ -499,10 +490,9 @@ namespace WPEFramework
 
     void HdmiCecSourceImplementation::OnDeviceSettingsDeactivated()
     {
-        LOGINFO("OnDeviceSettingsDeactivated: clearing cached handles");
+        LOGINFO("OnDeviceSettingsDeactivated: clearing config stores");
         _vpConfigStore.Clear();
-        _videoPortHandles.clear();
-        _displayHandles.clear();
+        // _videoPortHandles, _displayHandles cleared by base class
     }
 
     void HdmiCecSourceImplementation::registerEventHandlers()

@@ -388,10 +388,8 @@ namespace WPEFramework {
             uint32_t sendKeyPressEvent(const int logicalAddress, int keyCode);
             int getUIKeyCode(int keyCode);
 
-            // DS COM-RPC state
-            VideoPortConfigStore                             _videoPortConfig;
-            int32_t _videoPortHandle { -1 };
-            int32_t _displayHandle   { -1 };
+            // DS COM-RPC state — _vpConfigStore, _videoPortHandles, _displayHandles
+            // are inherited from DeviceSettingsClientHelper (base class)
             Core::Sink<DSVideoPortNotification>         _dsVideoPortNotification;
             Core::Sink<DSDisplayHotPlugNotification>     _dsDisplayHotPlugNotification;
 

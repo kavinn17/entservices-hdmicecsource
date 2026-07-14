@@ -1,41 +1,16 @@
-name: vdevice-docker-pull
+name: vdevice-qemu-setup
 
 on:
   workflow_call:
     inputs:
-      docker_image:
-        description: Docker image (including tag) to pull for vdevice QEMU core image.
-        required: false
-        type: string
-        default: ghcr.io/rdkcentral/vdevice-qemu:latest
-      docker_registry:
-        description: Optional registry host for docker login, e.g. ghcr.io.
-        required: false
-        type: string
-        default: ""
       runner:
         description: Runner label.
         required: false
         type: string
         default: ubuntu-22.04
-    secrets:
-      REGISTRY_USERNAME:
-        required: false
-      REGISTRY_PASSWORD:
-        required: false
 
   workflow_dispatch:
     inputs:
-      docker_image:
-        description: Docker image (including tag) to pull for vdevice QEMU core image.
-        required: false
-        type: string
-        default: ghcr.io/rdkcentral/vdevice-qemu:latest
-      docker_registry:
-        description: Optional registry host for docker login, e.g. ghcr.io.
-        required: false
-        type: string
-        default: ""
       runner:
         description: Runner label.
         required: false
@@ -46,35 +21,23 @@ permissions:
   contents: read
 
 jobs:
-  pull-vdevice-core-image:
-    name: Pull vdevice core image
+  setup-vdevice-qemu:
+    name: Setup QEMU for vdevice
     runs-on: ${{ inputs.runner || 'ubuntu-22.04' }}
     steps:
-      - name: Resolve image
-        id: resolve
+      - name: Install QEMU system emulation
         shell: bash
         run: |
-          IMAGE="${{ inputs.docker_image }}"
-          if [ -z "$IMAGE" ]; then
-            IMAGE="ghcr.io/rdkcentral/vdevice-qemu:latest"
-          fi
-          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
-          echo "Docker image to pull: $IMAGE"
+          sudo apt-get update -y
+          sudo apt-get install -y qemu-system
 
-      - name: Docker login (optional)
+      - name: Install QEMU user-static (Linux binary emulation)
         shell: bash
-        env:
-          DOCKER_REGISTRY: ${{ inputs.docker_registry }}
-          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
-          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
         run: |
-          if [ -n "$DOCKER_REGISTRY" ] && [ -n "$REGISTRY_USERNAME" ] && [ -n "$REGISTRY_PASSWORD" ]; then
-            echo "$REGISTRY_PASSWORD" | docker login "$DOCKER_REGISTRY" -u "$REGISTRY_USERNAME" --password-stdin
-          else
-            echo "Skipping docker login (registry or credentials not provided)."
-          fi
+          sudo apt-get install -y qemu-user-static
 
-      - name: Pull docker image
+      - name: Verify QEMU installation
         shell: bash
         run: |
-          docker pull "${{ steps.resolve.outputs.image }}"
+          qemu-system-x86_64 --version
+          qemu-x86_64-static --version

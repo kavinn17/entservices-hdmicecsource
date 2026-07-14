@@ -10,7 +10,5 @@ on:
     branches: [ main, develop, 'sprint/**', 'release/**', 'test/**' ]
 
 jobs:
-  trigger-vdevice-docker-pull:
+  trigger-vdevice-qemu-setup:
     uses: ./.github/workflows/vdevice-docker-pull.yml
-    with:
-      docker_image: ${{ vars.VDEVICE_QEMU_IMAGE || 'ghcr.io/rdkcentral/vdevice-qemu:latest' }}

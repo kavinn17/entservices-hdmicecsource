@@ -1,0 +1,80 @@
+name: vdevice-docker-pull
+
+on:
+  workflow_call:
+    inputs:
+      docker_image:
+        description: Docker image (including tag) to pull for vdevice QEMU core image.
+        required: false
+        type: string
+        default: ghcr.io/rdkcentral/vdevice-qemu:latest
+      docker_registry:
+        description: Optional registry host for docker login, e.g. ghcr.io.
+        required: false
+        type: string
+        default: ""
+      runner:
+        description: Runner label.
+        required: false
+        type: string
+        default: ubuntu-22.04
+    secrets:
+      REGISTRY_USERNAME:
+        required: false
+      REGISTRY_PASSWORD:
+        required: false
+
+  workflow_dispatch:
+    inputs:
+      docker_image:
+        description: Docker image (including tag) to pull for vdevice QEMU core image.
+        required: false
+        type: string
+        default: ghcr.io/rdkcentral/vdevice-qemu:latest
+      docker_registry:
+        description: Optional registry host for docker login, e.g. ghcr.io.
+        required: false
+        type: string
+        default: ""
+      runner:
+        description: Runner label.
+        required: false
+        type: string
+        default: ubuntu-22.04
+
+permissions:
+  contents: read
+
+jobs:
+  pull-vdevice-core-image:
+    name: Pull vdevice core image
+    runs-on: ${{ inputs.runner || 'ubuntu-22.04' }}
+    steps:
+      - name: Resolve image
+        id: resolve
+        shell: bash
+        run: |
+          IMAGE="${{ inputs.docker_image }}"
+          if [ -z "$IMAGE" ]; then
+            IMAGE="ghcr.io/rdkcentral/vdevice-qemu:latest"
+          fi
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+          echo "Docker image to pull: $IMAGE"
+
+      - name: Docker login (optional)
+        shell: bash
+        env:
+          DOCKER_REGISTRY: ${{ inputs.docker_registry }}
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+        run: |
+          if [ -n "$DOCKER_REGISTRY" ] && [ -n "$REGISTRY_USERNAME" ] && [ -n "$REGISTRY_PASSWORD" ]; then
+            echo "$REGISTRY_PASSWORD" | docker login "$DOCKER_REGISTRY" -u "$REGISTRY_USERNAME" --password-stdin
+          else
+            echo "Skipping docker login (registry or credentials not provided)."
+          fi
+
+      - name: Pull docker image
+        shell: bash
+        run: |
+          docker pull "${{ steps.resolve.outputs.image }}"

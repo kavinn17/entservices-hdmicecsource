@@ -1,0 +1,17 @@
+name: vdevice-main-workflow
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [ main, develop, 'sprint/**', 'release/**' ]
+  pull_request:
+    branches: [ main, develop, 'sprint/**', 'release/**' ]
+
+jobs:
+  trigger-vdevice-docker-pull:
+    if: ${{ vars.VDEVICE_QEMU_IMAGE != '' }}
+    uses: ./.github/workflows/vdevice-docker-pull.yml
+    with:
+      docker_image: ${{ vars.VDEVICE_QEMU_IMAGE }}

@@ -40,6 +40,8 @@ set_target_properties(${MODULE_NAME} PROPERTIES
 
 target_include_directories(${MODULE_NAME} PRIVATE ${IARMBUS_INCLUDE_DIRS})
 
+
+
 target_link_libraries(${MODULE_NAME}
     PRIVATE
         CompileSettingsDebug::CompileSettingsDebug

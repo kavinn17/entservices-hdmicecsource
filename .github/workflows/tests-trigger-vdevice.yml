@@ -5,9 +5,9 @@ permissions:
 
 on:
   push:
-    branches: [ main, develop, 'sprint/**', 'release/**', 'test/**' ]
+    branches: [ main, develop, 'sprint/**', 'release/**' ]
   pull_request:
-    branches: [ main, develop, 'sprint/**', 'release/**', 'test/**' ]
+    branches: [ main, develop, 'sprint/**', 'release/**' ]
 
 jobs:
   trigger-vdevice-docker-pull:

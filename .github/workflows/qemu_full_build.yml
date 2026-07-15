@@ -16,6 +16,9 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/rdkcentral/docker-rdk-ci:latest
+    defaults:
+      run:
+        shell: bash
     env:
       QEMU_WORKDIR: /tmp/qemu-artifacts
       SSH_HOST_PORT: '5522'

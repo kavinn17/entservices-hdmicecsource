@@ -19,7 +19,6 @@ set(PLUGIN_NAME HdmiCecSource)
 set(MODULE_NAME ${NAMESPACE}${PLUGIN_NAME})
 set(PLUGIN_IMPLEMENTATION ${MODULE_NAME}Implementation)
 
-
 set(PLUGIN_HDMICECSOURCE_STARTUPORDER "" CACHE STRING "To configure startup order of HdmiCecSource plugin")
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")

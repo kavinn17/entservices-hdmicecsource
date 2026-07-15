@@ -1,23 +1,166 @@
 name: Build Component in Native Environment
 
+permissions:
+  contents: read
+
 on:
+  workflow_dispatch:
   push:
     branches: [ main, qemu, 'sprint/**', 'release/**', develop, 'test/**' ]
   pull_request:
     branches: [ main, qemu, 'sprint/**', 'release/**', topic/RDK*, develop, 'test/**' ]
 
 jobs:
-  build-entservices-on-pr:
-    name: Build entservices-hdmicecsource component in github rdkcentral
+  build-and-deploy-to-qemu:
+    name: Build entservices-hdmicecsource and deploy into QEMU
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/rdkcentral/docker-rdk-ci:latest
+    env:
+      QEMU_WORKDIR: /tmp/qemu-artifacts
+      SSH_HOST_PORT: '5522'
+      QEMU_SSH_USER: root
+      QEMU_GUEST_LIB_DIR: /usr/lib/wpeframework/plugins
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-      - name: native build
+      - name: Build dependencies
         run: |
           sh -x build_dependencies.sh
+
+      - name: Build entservices-hdmicecsource
+        run: |
           sh -x cov_build.sh
+
+      - name: Collect plugin artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/plugins
+          find "$PWD/install" -type f -name '*.so' | grep '/plugins/' | tee artifacts/plugins/so-list.txt
+          while IFS= read -r sofile; do
+            cp -v "$sofile" artifacts/plugins/
+          done < artifacts/plugins/so-list.txt
+          test -n "$(ls -A artifacts/plugins/*.so 2>/dev/null || true)" || {
+            echo "No plugin .so files found under install path" >&2
+            exit 1
+          }
+
+      - name: Install QEMU and SSH tools
+        run: |
+          set -euo pipefail
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            qemu-system-x86 \
+            openssh-client \
+            curl \
+            ca-certificates \
+            netcat-openbsd
+
+      - name: Download kernel, rootfs and optional run script from Artifactory
+        env:
+          ARTIFACTORY_USER: ${{ secrets.ARTIFACTORY_USER }}
+          ARTIFACTORY_PASSWORD: ${{ secrets.ARTIFACTORY_PASSWORD }}
+          QEMU_KERNEL_URL: ${{ secrets.QEMU_KERNEL_URL }}
+          QEMU_ROOTFS_URL: ${{ secrets.QEMU_ROOTFS_URL }}
+          QEMU_RUN_SCRIPT_URL: ${{ secrets.QEMU_RUN_SCRIPT_URL }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$QEMU_WORKDIR"
+
+          : "${QEMU_KERNEL_URL:?Missing secret QEMU_KERNEL_URL}"
+          : "${QEMU_ROOTFS_URL:?Missing secret QEMU_ROOTFS_URL}"
+
+          auth_args=()
+          if [[ -n "${ARTIFACTORY_USER:-}" && -n "${ARTIFACTORY_PASSWORD:-}" ]]; then
+            auth_args=(-u "${ARTIFACTORY_USER}:${ARTIFACTORY_PASSWORD}")
+          fi
+
+          curl -fL "${auth_args[@]}" "$QEMU_KERNEL_URL" -o "$QEMU_WORKDIR/kernel.bin"
+          curl -fL "${auth_args[@]}" "$QEMU_ROOTFS_URL" -o "$QEMU_WORKDIR/rootfs.ext4"
+
+          if [[ -n "${QEMU_RUN_SCRIPT_URL:-}" ]]; then
+            curl -fL "${auth_args[@]}" "$QEMU_RUN_SCRIPT_URL" -o "$QEMU_WORKDIR/run_qemu.sh"
+            chmod +x "$QEMU_WORKDIR/run_qemu.sh"
+          fi
+
+      - name: Boot QEMU inside CI container
+        run: |
+          set -euo pipefail
+
+          if [[ -f "$QEMU_WORKDIR/run_qemu.sh" ]] && ! grep -Eq '/mingw64|whpx' "$QEMU_WORKDIR/run_qemu.sh"; then
+            KERNEL_FILE="$QEMU_WORKDIR/kernel.bin" \
+            ROOTFS_FILE="$QEMU_WORKDIR/rootfs.ext4" \
+            SSH_HOST_PORT="$SSH_HOST_PORT" \
+            nohup bash "$QEMU_WORKDIR/run_qemu.sh" > "$QEMU_WORKDIR/qemu.log" 2>&1 &
+          else
+            qemu-system-x86_64 \
+              -machine q35,accel=tcg \
+              -cpu max \
+              -kernel "$QEMU_WORKDIR/kernel.bin" \
+              -append "console=ttyS0 root=/dev/vda rw rootwait init=/sbin/init" \
+              -drive file="$QEMU_WORKDIR/rootfs.ext4",if=virtio,format=raw \
+              -smp 4 \
+              -m 2048 \
+              -display none \
+              -serial file:"$QEMU_WORKDIR/serial.log" \
+              -netdev user,id=network0,hostfwd=tcp:127.0.0.1:${SSH_HOST_PORT}-:22 \
+              -device e1000,netdev=network0 \
+              -daemonize \
+              -pidfile "$QEMU_WORKDIR/qemu.pid"
+          fi
+
+      - name: Wait for SSH in guest
+        env:
+          QEMU_SSH_PRIVATE_KEY: ${{ secrets.QEMU_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+
+          ssh_key_arg=()
+          if [[ -n "${QEMU_SSH_PRIVATE_KEY:-}" ]]; then
+            mkdir -p ~/.ssh
+            printf '%s\n' "$QEMU_SSH_PRIVATE_KEY" > ~/.ssh/qemu_id_rsa
+            chmod 600 ~/.ssh/qemu_id_rsa
+            ssh_key_arg=(-i ~/.ssh/qemu_id_rsa)
+          fi
+
+          for attempt in $(seq 1 120); do
+            if nc -z 127.0.0.1 "$SSH_HOST_PORT"; then
+              if ssh "${ssh_key_arg[@]}" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -p "$SSH_HOST_PORT" "$QEMU_SSH_USER@127.0.0.1" 'echo SSH_READY'; then
+                exit 0
+              fi
+            fi
+            sleep 5
+          done
+
+          echo "QEMU guest SSH did not become ready in time" >&2
+          exit 1
+
+      - name: Copy new plugin .so into QEMU
+        env:
+          QEMU_SSH_PRIVATE_KEY: ${{ secrets.QEMU_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+
+          ssh_key_arg=()
+          if [[ -n "${QEMU_SSH_PRIVATE_KEY:-}" ]]; then
+            ssh_key_arg=(-i ~/.ssh/qemu_id_rsa)
+          fi
+
+          for sofile in artifacts/plugins/*.so; do
+            scp "${ssh_key_arg[@]}" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -P "$SSH_HOST_PORT" "$sofile" "$QEMU_SSH_USER@127.0.0.1:$QEMU_GUEST_LIB_DIR/"
+          done
+
+          ssh "${ssh_key_arg[@]}" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$SSH_HOST_PORT" "$QEMU_SSH_USER@127.0.0.1" "sync; systemctl restart WPEFramework || true"
+
+      - name: Upload logs and plugin artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qemu-build-and-logs
+          path: |
+            artifacts/plugins/**
+            /tmp/qemu-artifacts/*.log
+            /tmp/qemu-artifacts/*.pid
+            /tmp/qemu-artifacts/serial.log

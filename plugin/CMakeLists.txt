@@ -31,6 +31,9 @@ find_package(${NAMESPACE}Helpers REQUIRED)
 find_package(${NAMESPACE}Definitions REQUIRED)
 find_package(CompileSettingsDebug CONFIG REQUIRED)
 
+
+
+
 add_library(${MODULE_NAME} SHARED
         HdmiCecSource.cpp
         Module.cpp)

@@ -154,7 +154,7 @@ jobs:
                   fi
                 done
               fi
-            fi
+            done
             sleep 5
           done
 

@@ -22,6 +22,7 @@ jobs:
     env:
       QEMU_WORKDIR: /tmp/qemu-artifacts
       SSH_HOST_PORT: '5522'
+      SSH_HOST_PORT_ALT: '5523'
       QEMU_SSH_USER: root
       QEMU_GUEST_LIB_DIR: /usr/lib/wpeframework/plugins
       QEMU_IMAGE_DIR: Tests/vDeviceTests/qemu-images
@@ -110,11 +111,13 @@ jobs:
               -m 2048 \
               -display none \
               -serial file:"$QEMU_WORKDIR/serial.log" \
-              -netdev user,id=network0,hostfwd=tcp:127.0.0.1:${SSH_HOST_PORT}-:22 \
-              -device e1000,netdev=network0 \
+              -netdev user,id=network0,hostfwd=tcp:127.0.0.1:${SSH_HOST_PORT}-:22,hostfwd=tcp:127.0.0.1:${SSH_HOST_PORT_ALT}-:2222 \
+              -device virtio-net-pci,netdev=network0 \
               -daemonize \
               -pidfile "$QEMU_WORKDIR/qemu.pid"
           fi
+
+          test -f "$QEMU_WORKDIR/qemu.pid" && cat "$QEMU_WORKDIR/qemu.pid"
 
       - name: Wait for SSH in guest
         env:
@@ -130,16 +133,36 @@ jobs:
             ssh_key_arg=(-i ~/.ssh/qemu_id_rsa)
           fi
 
-          for attempt in $(seq 1 120); do
-            if nc -z 127.0.0.1 "$SSH_HOST_PORT"; then
-              if ssh "${ssh_key_arg[@]}" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -p "$SSH_HOST_PORT" "$QEMU_SSH_USER@127.0.0.1" 'echo SSH_READY'; then
-                exit 0
+          port_candidates=("$SSH_HOST_PORT" "$SSH_HOST_PORT_ALT")
+          user_candidates=("$QEMU_SSH_USER" "root" "rdk")
+
+          for attempt in $(seq 1 180); do
+            if [[ -f "$QEMU_WORKDIR/qemu.pid" ]] && ! kill -0 "$(cat "$QEMU_WORKDIR/qemu.pid")" 2>/dev/null; then
+              echo "QEMU process exited before SSH became ready" >&2
+              break
+            fi
+
+            for ssh_port in "${port_candidates[@]}"; do
+              if nc -z 127.0.0.1 "$ssh_port"; then
+                for ssh_user in "${user_candidates[@]}"; do
+                  if ssh "${ssh_key_arg[@]}" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=7 -p "$ssh_port" "$ssh_user@127.0.0.1" 'echo SSH_READY'; then
+                    {
+                      echo "QEMU_SSH_PORT=$ssh_port"
+                      echo "QEMU_SSH_USER=$ssh_user"
+                    } > "$QEMU_WORKDIR/ssh-target.env"
+                    exit 0
+                  fi
+                done
               fi
             fi
             sleep 5
           done
 
           echo "QEMU guest SSH did not become ready in time" >&2
+          echo "----- serial.log tail -----" >&2
+          tail -n 200 "$QEMU_WORKDIR/serial.log" >&2 || true
+          echo "----- qemu.log tail -----" >&2
+          tail -n 200 "$QEMU_WORKDIR/qemu.log" >&2 || true
           exit 1
 
       - name: Copy new plugin .so into QEMU
@@ -148,16 +171,24 @@ jobs:
         run: |
           set -euo pipefail
 
+          if [[ -f "$QEMU_WORKDIR/ssh-target.env" ]]; then
+            # shellcheck disable=SC1090
+            source "$QEMU_WORKDIR/ssh-target.env"
+          fi
+
+          selected_ssh_port="${QEMU_SSH_PORT:-$SSH_HOST_PORT}"
+          selected_ssh_user="${QEMU_SSH_USER:-root}"
+
           ssh_key_arg=()
           if [[ -n "${QEMU_SSH_PRIVATE_KEY:-}" ]]; then
             ssh_key_arg=(-i ~/.ssh/qemu_id_rsa)
           fi
 
           for sofile in artifacts/plugins/*.so; do
-            scp "${ssh_key_arg[@]}" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -P "$SSH_HOST_PORT" "$sofile" "$QEMU_SSH_USER@127.0.0.1:$QEMU_GUEST_LIB_DIR/"
+            scp "${ssh_key_arg[@]}" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -P "$selected_ssh_port" "$sofile" "$selected_ssh_user@127.0.0.1:$QEMU_GUEST_LIB_DIR/"
           done
 
-          ssh "${ssh_key_arg[@]}" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$SSH_HOST_PORT" "$QEMU_SSH_USER@127.0.0.1" "sync; systemctl restart WPEFramework || true"
+          ssh "${ssh_key_arg[@]}" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$selected_ssh_port" "$selected_ssh_user@127.0.0.1" "sync; systemctl restart WPEFramework || true"
 
       - name: Upload logs and plugin artifacts
         if: always()

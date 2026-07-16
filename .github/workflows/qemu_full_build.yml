@@ -61,32 +61,41 @@ jobs:
             ca-certificates \
             netcat-openbsd
 
-      - name: Download kernel, rootfs and optional run script from Artifactory
-        env:
-          ARTIFACTORY_USER: ${{ vars.ARTIFACTORY_USER || secrets.ARTIFACTORY_USER }}
-          ARTIFACTORY_PASSWORD: ${{ secrets.ARTIFACTORY_PASSWORD }}
-          QEMU_KERNEL_URL: ${{ vars.QEMU_KERNEL_URL || secrets.QEMU_KERNEL_URL }}
-          QEMU_ROOTFS_URL: ${{ vars.QEMU_ROOTFS_URL || secrets.QEMU_ROOTFS_URL }}
-          QEMU_RUN_SCRIPT_URL: ${{ vars.QEMU_RUN_SCRIPT_URL || secrets.QEMU_RUN_SCRIPT_URL }}
+      - name: Set up JFrog CLI
+        uses: jfrog/setup-jfrog-cli@v4
+
+      - name: Configure JFrog CLI
+        run: |
+          jfrog config add Default-Server \
+            --artifactory-url "https://${{ vars.ARTIFACTORY_HOST }}/artifactory" \
+            --user "${{ vars.ARTIFACTORY_USER }}" \
+            --apikey "${{ secrets.ARTIFACTORY_APIKEY }}" \
+            --interactive=false
+
+      - name: Download kernel, rootfs and run script from Artifactory
         run: |
           set -euo pipefail
           mkdir -p "$QEMU_WORKDIR"
 
-          : "${QEMU_KERNEL_URL:?Missing QEMU_KERNEL_URL (set repo Variable or Secret)}"
-          : "${QEMU_ROOTFS_URL:?Missing QEMU_ROOTFS_URL (set repo Variable or Secret)}"
+          # Download kernel image
+          jfrog rt dl \
+            "${{ vars.QEMU_ARTIFACTORY_REPO }}/${{ vars.QEMU_KERNEL_PATH }}" \
+            "$QEMU_WORKDIR/kernel.bin" --flat=true
 
-          auth_args=()
-          if [[ -n "${ARTIFACTORY_USER:-}" && -n "${ARTIFACTORY_PASSWORD:-}" ]]; then
-            auth_args=(-u "${ARTIFACTORY_USER}:${ARTIFACTORY_PASSWORD}")
-          fi
+          # Download rootfs image
+          jfrog rt dl \
+            "${{ vars.QEMU_ARTIFACTORY_REPO }}/${{ vars.QEMU_ROOTFS_PATH }}" \
+            "$QEMU_WORKDIR/rootfs.ext4" --flat=true
 
-          curl -fL "${auth_args[@]}" "$QEMU_KERNEL_URL" -o "$QEMU_WORKDIR/kernel.bin"
-          curl -fL "${auth_args[@]}" "$QEMU_ROOTFS_URL" -o "$QEMU_WORKDIR/rootfs.ext4"
-
-          if [[ -n "${QEMU_RUN_SCRIPT_URL:-}" ]]; then
-            curl -fL "${auth_args[@]}" "$QEMU_RUN_SCRIPT_URL" -o "$QEMU_WORKDIR/run_qemu.sh"
+          # Download run script (optional)
+          if [[ -n "${{ vars.QEMU_RUN_SCRIPT_PATH }}" ]]; then
+            jfrog rt dl \
+              "${{ vars.QEMU_ARTIFACTORY_REPO }}/${{ vars.QEMU_RUN_SCRIPT_PATH }}" \
+              "$QEMU_WORKDIR/run_qemu.sh" --flat=true
             chmod +x "$QEMU_WORKDIR/run_qemu.sh"
           fi
+
+          ls -lh "$QEMU_WORKDIR/"
 
       - name: Boot QEMU inside CI container
         run: |

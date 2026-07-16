@@ -95,29 +95,30 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [[ -f "$QEMU_WORKDIR/run_qemu.sh" ]] && ! grep -Eq '/mingw64|whpx' "$QEMU_WORKDIR/run_qemu.sh"; then
-            KERNEL_FILE="$QEMU_WORKDIR/kernel.bin" \
-            ROOTFS_FILE="$QEMU_WORKDIR/rootfs.ext4" \
-            SSH_HOST_PORT="$SSH_HOST_PORT" \
-            nohup bash "$QEMU_WORKDIR/run_qemu.sh" > "$QEMU_WORKDIR/qemu.log" 2>&1 &
+          # Use KVM if available for fast boot; fall back to TCG (slow ~5-10 min)
+          if [[ -r /dev/kvm ]]; then
+            accel_args="-machine q35,accel=kvm -enable-kvm -cpu host"
+            echo "KVM available, using hardware acceleration"
           else
-            qemu-system-x86_64 \
-              -machine q35,accel=tcg \
-              -cpu max \
-              -kernel "$QEMU_WORKDIR/kernel.bin" \
-              -append "console=ttyS0 root=/dev/vda rw rootwait init=/sbin/init" \
-              -drive file="$QEMU_WORKDIR/rootfs.ext4",if=virtio,format=raw \
-              -smp 4 \
-              -m 2048 \
-              -display none \
-              -serial file:"$QEMU_WORKDIR/serial.log" \
-              -netdev user,id=network0,hostfwd=tcp:127.0.0.1:${SSH_HOST_PORT}-:22,hostfwd=tcp:127.0.0.1:${SSH_HOST_PORT_ALT}-:2222 \
-              -device virtio-net-pci,netdev=network0 \
-              -daemonize \
-              -pidfile "$QEMU_WORKDIR/qemu.pid"
+            accel_args="-machine q35,accel=tcg -cpu max"
+            echo "KVM not available, using software emulation (boot may take 5-10 minutes)"
           fi
 
-          test -f "$QEMU_WORKDIR/qemu.pid" && cat "$QEMU_WORKDIR/qemu.pid"
+          qemu-system-x86_64 \
+            $accel_args \
+            -kernel "$QEMU_WORKDIR/kernel.bin" \
+            -append "console=ttyS0 root=/dev/vda rw rootwait init=/sbin/init" \
+            -drive file="$QEMU_WORKDIR/rootfs.ext4",if=virtio,format=raw \
+            -smp 4 \
+            -m 2048 \
+            -display none \
+            -serial file:"$QEMU_WORKDIR/serial.log" \
+            -netdev user,id=network0,hostfwd=tcp:127.0.0.1:${SSH_HOST_PORT}-:22 \
+            -device virtio-net-pci,netdev=network0 \
+            -daemonize \
+            -pidfile "$QEMU_WORKDIR/qemu.pid"
+
+          echo "QEMU started with PID: $(cat $QEMU_WORKDIR/qemu.pid)"
 
       - name: Wait for SSH in guest
         env:
@@ -133,36 +134,37 @@ jobs:
             ssh_key_arg=(-i ~/.ssh/qemu_id_rsa)
           fi
 
-          port_candidates=("$SSH_HOST_PORT" "$SSH_HOST_PORT_ALT")
           user_candidates=("$QEMU_SSH_USER" "root" "rdk")
 
-          for attempt in $(seq 1 180); do
+          # Allow up to 20 min (240 x 5s); TCG emulation needs ~10 min to boot
+          for attempt in $(seq 1 240); do
+            # Abort early if QEMU process died
             if [[ -f "$QEMU_WORKDIR/qemu.pid" ]] && ! kill -0 "$(cat "$QEMU_WORKDIR/qemu.pid")" 2>/dev/null; then
               echo "QEMU process exited before SSH became ready" >&2
               break
             fi
 
-            for ssh_port in "${port_candidates[@]}"; do
-              if nc -z 127.0.0.1 "$ssh_port"; then
-                for ssh_user in "${user_candidates[@]}"; do
-                  if ssh "${ssh_key_arg[@]}" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=7 -p "$ssh_port" "$ssh_user@127.0.0.1" 'echo SSH_READY'; then
-                    {
-                      echo "QEMU_SSH_PORT=$ssh_port"
-                      echo "QEMU_SSH_USER=$ssh_user"
-                    } > "$QEMU_WORKDIR/ssh-target.env"
-                    exit 0
-                  fi
-                done
-              fi
-            done
+            # Print serial log progress every 30 attempts (~2.5 min)
+            if (( attempt % 30 == 0 )); then
+              echo "--- boot progress at attempt $attempt ---"
+              tail -n 20 "$QEMU_WORKDIR/serial.log" 2>/dev/null || true
+            fi
+
+            if nc -z -w2 127.0.0.1 "$SSH_HOST_PORT" 2>/dev/null; then
+              for ssh_user in "${user_candidates[@]}"; do
+                if ssh "${ssh_key_arg[@]}" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -p "$SSH_HOST_PORT" "$ssh_user@127.0.0.1" 'echo SSH_READY' 2>/dev/null; then
+                  echo "QEMU_SSH_PORT=$SSH_HOST_PORT" > "$QEMU_WORKDIR/ssh-target.env"
+                  echo "QEMU_SSH_USER=$ssh_user" >> "$QEMU_WORKDIR/ssh-target.env"
+                  exit 0
+                fi
+              done
+            fi
             sleep 5
           done
 
           echo "QEMU guest SSH did not become ready in time" >&2
-          echo "----- serial.log tail -----" >&2
-          tail -n 200 "$QEMU_WORKDIR/serial.log" >&2 || true
-          echo "----- qemu.log tail -----" >&2
-          tail -n 200 "$QEMU_WORKDIR/qemu.log" >&2 || true
+          echo "----- last 100 lines of serial.log -----" >&2
+          tail -n 100 "$QEMU_WORKDIR/serial.log" >&2 || true
           exit 1
 
       - name: Copy new plugin .so into QEMU

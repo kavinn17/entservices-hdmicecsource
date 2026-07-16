@@ -24,10 +24,16 @@ jobs:
       SSH_HOST_PORT: '5522'
       QEMU_SSH_USER: root
       QEMU_GUEST_LIB_DIR: /usr/lib/wpeframework/plugins
+      QEMU_IMAGE_DIR: Tests/vDeviceTests/qemu-images
+      QEMU_KERNEL_FILE: bzImage.bin
+      QEMU_ROOTFS_FILE: rootfs.ext4
+      QEMU_RUN_SCRIPT_FILE: run_qemu.sh
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          lfs: true
 
       - name: Build dependencies
         run: |
@@ -61,37 +67,24 @@ jobs:
             ca-certificates \
             netcat-openbsd
 
-      - name: Set up JFrog CLI
-        uses: jfrog/setup-jfrog-cli@v4
-
-      - name: Configure JFrog CLI
-        run: |
-          jfrog config add Default-Server \
-            --artifactory-url "https://${{ vars.ARTIFACTORY_HOST }}/artifactory" \
-            --user "${{ vars.ARTIFACTORY_USER }}" \
-            --apikey "${{ secrets.ARTIFACTORY_APIKEY }}" \
-            --interactive=false
-
-      - name: Download kernel, rootfs and run script from Artifactory
+      - name: Prepare kernel, rootfs and run script from repository (LFS)
         run: |
           set -euo pipefail
           mkdir -p "$QEMU_WORKDIR"
+          image_dir="$GITHUB_WORKSPACE/$QEMU_IMAGE_DIR"
 
-          # Download kernel image
-          jfrog rt dl \
-            "${{ vars.QEMU_ARTIFACTORY_REPO }}/${{ vars.QEMU_KERNEL_PATH }}" \
-            "$QEMU_WORKDIR/kernel.bin" --flat=true
+          kernel_src="$image_dir/$QEMU_KERNEL_FILE"
+          rootfs_src="$image_dir/$QEMU_ROOTFS_FILE"
+          run_script_src="$image_dir/$QEMU_RUN_SCRIPT_FILE"
 
-          # Download rootfs image
-          jfrog rt dl \
-            "${{ vars.QEMU_ARTIFACTORY_REPO }}/${{ vars.QEMU_ROOTFS_PATH }}" \
-            "$QEMU_WORKDIR/rootfs.ext4" --flat=true
+          [[ -f "$kernel_src" ]] || { echo "Missing kernel image: $kernel_src" >&2; exit 1; }
+          [[ -f "$rootfs_src" ]] || { echo "Missing rootfs image: $rootfs_src" >&2; exit 1; }
 
-          # Download run script (optional)
-          if [[ -n "${{ vars.QEMU_RUN_SCRIPT_PATH }}" ]]; then
-            jfrog rt dl \
-              "${{ vars.QEMU_ARTIFACTORY_REPO }}/${{ vars.QEMU_RUN_SCRIPT_PATH }}" \
-              "$QEMU_WORKDIR/run_qemu.sh" --flat=true
+          cp -f "$kernel_src" "$QEMU_WORKDIR/kernel.bin"
+          cp -f "$rootfs_src" "$QEMU_WORKDIR/rootfs.ext4"
+
+          if [[ -f "$run_script_src" ]]; then
+            cp -f "$run_script_src" "$QEMU_WORKDIR/run_qemu.sh"
             chmod +x "$QEMU_WORKDIR/run_qemu.sh"
           fi
 

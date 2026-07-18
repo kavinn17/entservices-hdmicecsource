@@ -29,7 +29,7 @@
  * re-routed through the DeviceSettings COM-RPC plugin.
  *
  * Changes vs DS_IARM:
- *   - Inherits DeviceSettingsClientHelper for a single COM-RPC link.
+ *   - Inherits DSHelper for a single COM-RPC link.
  *   - Inherits Exchange::IConfiguration so the HdmiCecSource proxy can pass
  *     IShell* via Configure(service).
  *   - device::Host::IDisplayDeviceEvents replaced by inner
@@ -65,7 +65,7 @@
 #include "PowerManagerInterface.h"
 #include <interfaces/IHdmiCecSource.h>
 #include <interfaces/IConfiguration.h>
-#include "DeviceSettingsClientHelper.h"
+#include "DeviceSettingsInterface.h"
 #include <interfaces/IDeviceSettingsDisplay.h>
 
 using namespace WPEFramework;
@@ -170,7 +170,7 @@ namespace WPEFramework {
         class HdmiCecSourceImplementation
             : public Exchange::IHdmiCecSource
             , public Exchange::IConfiguration
-            , public DeviceSettingsClientHelper
+            , public DSHelper
         {
             enum {
                 VOLUME_UP     = 0x41,
@@ -388,10 +388,12 @@ namespace WPEFramework {
             uint32_t sendKeyPressEvent(const int logicalAddress, int keyCode);
             int getUIKeyCode(int keyCode);
 
-            // DS COM-RPC state — _vpConfigStore, _videoPortHandles, _displayHandles
-            // are inherited from DeviceSettingsClientHelper (base class)
-            Core::Sink<DSVideoPortNotification>         _dsVideoPortNotification;
-            Core::Sink<DSDisplayHotPlugNotification>     _dsDisplayHotPlugNotification;
+            // DSHelper provides cached video-port and audio-port handles (private).
+            // Access via DSHelper::getCachedVideoPortHandle() etc.
+            // _displayHandle is managed locally (DSHelper::LoadAllConfigs does not populate display handles).
+            int32_t                                         _displayHandle { INVALID_DS_HANDLE };
+            Core::Sink<DSVideoPortNotification>             _dsVideoPortNotification;
+            Core::Sink<DSDisplayHotPlugNotification>        _dsDisplayHotPlugNotification;
 
             PowerManagerInterfaceRef _powerManagerPlugin;
             Core::Sink<PowerManagerNotification> _pwrMgrNotification;
@@ -400,7 +402,7 @@ namespace WPEFramework {
             mutable Core::CriticalSection _adminLock;
             std::list<Exchange::IHdmiCecSource::INotification*> _hdmiCecSourceNotifications;
 
-            // DeviceSettingsClientHelper lifecycle
+            // DSHelper lifecycle
             void OnDeviceSettingsActivated() override;
             void OnDeviceSettingsDeactivated() override;
 

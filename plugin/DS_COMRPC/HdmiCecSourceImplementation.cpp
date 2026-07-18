@@ -361,7 +361,7 @@ namespace WPEFramework
            }
            _registeredEventHandlers = false;
            // COM-RPC path: Close DeviceSettings link (unregisters DSVideoPortNotification internally)
-           DeviceSettingsClientHelper::Close();
+           DSHelper::Close();
     }
 
     Core::hresult HdmiCecSourceImplementation::Configure(PluginHost::IShell* service)
@@ -383,7 +383,7 @@ namespace WPEFramework
             // COM-RPC path: open DeviceSettings link.
             // Display connectivity + EDID queries are handled in
             // OnDeviceSettingsActivated() once DeviceSettings is ready.
-            DeviceSettingsClientHelper::Open(service);
+            DSHelper::Open(service);
 
             // get power state:
             ASSERT (_powerManagerPlugin);
@@ -421,39 +421,38 @@ namespace WPEFramework
     // -----------------------------------------------------------------------
     void HdmiCecSourceImplementation::OnDeviceSettingsActivated()
     {
-        LOGINFO("OnDeviceSettingsActivated: loading video port config and caching handles");
+        LOGINFO("OnDeviceSettingsActivated: caching handles and registering notifications");
+        // Config is loaded lazily by DSHelper::_ensureConfigLoaded() on the first accessor call.
+        // No explicit LoadVideoPortConfig call needed.
 
-        // Load video port config
-        if (!LoadVideoPortConfig(_vpConfigStore)) {
-            LOGERR("OnDeviceSettingsActivated: failed to load video port config");
+        const std::string defaultVP = DSHelper::getDefaultVideoPortName();
+        VideoPortEntry defaultEntry{};
+        const bool entryResolved = DSHelper::resolveVideoPortByName(defaultVP, defaultEntry);
+
+        // Register for resolution change notifications (fires on HDMI hotplug)
+        {
+            auto* vp = DSHelper::AcquireSubInterface<Exchange::IDeviceSettingsVideoPort>();
+            if (vp != nullptr) {
+                vp->Register(&_dsVideoPortNotification);
+                vp->Release();
+            } else {
+                LOGERR("OnDeviceSettingsActivated: IDeviceSettingsVideoPort not available");
+            }
         }
 
-        // Video port handles are auto-populated by LoadVideoPortConfig() above
-        // Register for resolution change notifications
-        auto* vp = AcquireSubInterface<Exchange::IDeviceSettingsVideoPort>();
-        if (vp != nullptr) {
-            // Register for resolution change (fires on HDMI hotplug)
-            vp->Register(&_dsVideoPortNotification);
-            vp->Release();
-        } else {
-            LOGERR("OnDeviceSettingsActivated: IDeviceSettingsVideoPort not available");
-        }
-
-        // Get display handle
-        if (getCachedVideoPortHandle(_vpConfigStore.GetDefaultVideoPortName()) != INVALID_DS_HANDLE) {
-            auto* disp = AcquireSubInterface<Exchange::IDeviceSettingsDisplay>();
+        // Acquire display handle for default port (not cached by DSHelper::LoadAllConfigs)
+        _displayHandle = INVALID_DS_HANDLE;
+        if (entryResolved && DSHelper::getCachedVideoPortHandle(defaultVP) != INVALID_DS_HANDLE) {
+            auto* disp = DSHelper::AcquireSubInterface<Exchange::IDeviceSettingsDisplay>();
             if (disp != nullptr) {
-                VideoPortEntry defaultEntry;
-                if (_vpConfigStore.ResolveByName(_vpConfigStore.GetDefaultVideoPortName(), defaultEntry)) {
-                    Exchange::IDeviceSettingsDisplay::DisplayPortType dpType =
-                        static_cast<Exchange::IDeviceSettingsDisplay::DisplayPortType>(defaultEntry.type);
-                    Core::hresult rc = disp->GetDisplay(dpType, defaultEntry.index, _displayHandles[_vpConfigStore.GetDefaultVideoPortName()]);
-                    if (rc != Core::ERROR_NONE) {
-                        LOGERR("OnDeviceSettingsActivated: GetDisplay failed: %u", rc);
-                        _displayHandles.clear();
-                    } else {
-                        LOGINFO("OnDeviceSettingsActivated: cached _displayHandle=%d", getCachedDisplayHandle(_vpConfigStore.GetDefaultVideoPortName()));
-                    }
+                Exchange::IDeviceSettingsDisplay::DisplayPortType dpType =
+                    static_cast<Exchange::IDeviceSettingsDisplay::DisplayPortType>(defaultEntry.type);
+                Core::hresult rc = disp->GetDisplay(dpType, defaultEntry.index, _displayHandle);
+                if (rc != Core::ERROR_NONE) {
+                    LOGERR("OnDeviceSettingsActivated: GetDisplay failed: %u", rc);
+                    _displayHandle = INVALID_DS_HANDLE;
+                } else {
+                    LOGINFO("OnDeviceSettingsActivated: cached _displayHandle=%d", _displayHandle);
                 }
                 // Register for HDMI hotplug (both connect and disconnect events)
                 disp->Register(&_dsDisplayHotPlugNotification);
@@ -462,17 +461,18 @@ namespace WPEFramework
         }
 
         // Check display connected and detect LG TV via EDID manufacturer bytes
-        if (getCachedVideoPortHandle(_vpConfigStore.GetDefaultVideoPortName()) != INVALID_DS_HANDLE) {
-            auto* vp2 = AcquireSubInterface<Exchange::IDeviceSettingsVideoPort>();
+        const int32_t vpHandle = DSHelper::getCachedVideoPortHandle(defaultVP);
+        if (vpHandle != INVALID_DS_HANDLE) {
+            auto* vp2 = DSHelper::AcquireSubInterface<Exchange::IDeviceSettingsVideoPort>();
             if (vp2 != nullptr) {
                 bool connected = false;
-                if (vp2->IsVideoPortDisplayConnected(getCachedVideoPortHandle(_vpConfigStore.GetDefaultVideoPortName()), connected) == Core::ERROR_NONE && connected) {
-                    if (getCachedDisplayHandle(_vpConfigStore.GetDefaultVideoPortName()) != INVALID_DS_HANDLE) {
-                        auto* disp2 = AcquireSubInterface<Exchange::IDeviceSettingsDisplay>();
+                if (vp2->IsVideoPortDisplayConnected(vpHandle, connected) == Core::ERROR_NONE && connected) {
+                    if (_displayHandle != INVALID_DS_HANDLE) {
+                        auto* disp2 = DSHelper::AcquireSubInterface<Exchange::IDeviceSettingsDisplay>();
                         if (disp2 != nullptr) {
                             static const uint16_t kEdidBufLen = 256;
                             std::vector<uint8_t> edidVec(kEdidBufLen, 0);
-                            if (disp2->GetDisplayEdidBytes(getCachedDisplayHandle(_vpConfigStore.GetDefaultVideoPortName()), edidVec.data(), kEdidBufLen) == Core::ERROR_NONE) {
+                            if (disp2->GetDisplayEdidBytes(_displayHandle, edidVec.data(), kEdidBufLen) == Core::ERROR_NONE) {
                                 if (edidVec.size() > 9 && edidVec.at(8) == 0x1E && edidVec.at(9) == 0x6D) {
                                     isLGTvConnected = true;
                                 }
@@ -490,9 +490,9 @@ namespace WPEFramework
 
     void HdmiCecSourceImplementation::OnDeviceSettingsDeactivated()
     {
-        LOGINFO("OnDeviceSettingsDeactivated: clearing config stores");
-        _vpConfigStore.Clear();
-        // _videoPortHandles, _displayHandles cleared by base class
+        LOGINFO("OnDeviceSettingsDeactivated: clearing cached handles");
+        _displayHandle = INVALID_DS_HANDLE;
+        // Config stores and port handles cleared by DSHelper::Operational(false)
     }
 
     void HdmiCecSourceImplementation::registerEventHandlers()
@@ -772,17 +772,18 @@ namespace WPEFramework
                 getLogicalAddress();
 
                 // COM-RPC path: query connectivity and EDID via DeviceSettings plugin
-                if (getCachedVideoPortHandle(_vpConfigStore.GetDefaultVideoPortName()) != INVALID_DS_HANDLE) {
-                    auto* vp = AcquireSubInterface<Exchange::IDeviceSettingsVideoPort>();
+                const int32_t vpHandle = DSHelper::getCachedVideoPortHandle(DSHelper::getDefaultVideoPortName());
+                if (vpHandle != INVALID_DS_HANDLE) {
+                    auto* vp = DSHelper::AcquireSubInterface<Exchange::IDeviceSettingsVideoPort>();
                     if (vp != nullptr) {
                         bool connected = false;
-                        if (vp->IsVideoPortDisplayConnected(getCachedVideoPortHandle(_vpConfigStore.GetDefaultVideoPortName()), connected) == Core::ERROR_NONE && connected) {
-                            if (getCachedDisplayHandle(_vpConfigStore.GetDefaultVideoPortName()) != INVALID_DS_HANDLE) {
-                                auto* disp = AcquireSubInterface<Exchange::IDeviceSettingsDisplay>();
+                        if (vp->IsVideoPortDisplayConnected(vpHandle, connected) == Core::ERROR_NONE && connected) {
+                            if (_displayHandle != INVALID_DS_HANDLE) {
+                                auto* disp = DSHelper::AcquireSubInterface<Exchange::IDeviceSettingsDisplay>();
                                 if (disp != nullptr) {
                                     static const uint16_t kEdidBufLen = 256;
                                     std::vector<uint8_t> edidVec(kEdidBufLen, 0);
-                                    if (disp->GetDisplayEdidBytes(getCachedDisplayHandle(_vpConfigStore.GetDefaultVideoPortName()), edidVec.data(), kEdidBufLen) == Core::ERROR_NONE
+                                    if (disp->GetDisplayEdidBytes(_displayHandle, edidVec.data(), kEdidBufLen) == Core::ERROR_NONE
                                         && edidVec.size() > 9) {
                                         if (edidVec.at(8) == 0x1E && edidVec.at(9) == 0x6D) {
                                             isLGTvConnected = true;

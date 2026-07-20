@@ -26,10 +26,6 @@ jobs:
       QEMU_SSH_USER: root
       QEMU_GUEST_LIB_DIR: /usr/lib/wpeframework/plugins
       SKIP_COMPONENT_BUILD: 'true'
-      ALLOW_REPO_IMAGE_FALLBACK: 'true'
-      QEMU_IMAGE_DIR: Tests/vDeviceTests/qemu-images
-      QEMU_KERNEL_FILE: bzImage.bin
-      QEMU_ROOTFS_FILE: rootfs.ext4
       ARTIFACTORY_DEFAULT_IMAGE_URL: https://artifactory.comcast.com/artifactory/vdevice-generic/DefaultImage.tar.gz
       ARTIFACTORY_USER: ${{ secrets.ARTIFACTORY_USER }}
       ARTIFACTORY_TOKEN: ${{ secrets.ARTIFACTORY_TOKEN }}
@@ -39,7 +35,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          lfs: true
 
       - name: Build dependencies
         if: ${{ env.SKIP_COMPONENT_BUILD != 'true' }}
@@ -84,84 +79,43 @@ jobs:
           image_tar="$QEMU_WORKDIR/DefaultImage.tar.gz"
           extract_dir="$QEMU_WORKDIR/image"
 
-          use_artifactory='true'
           if [[ -z "${ARTIFACTORY_USER:-}" || -z "${ARTIFACTORY_TOKEN:-}" ]]; then
-            echo "Artifactory secrets missing; falling back to repository images"
-            use_artifactory='false'
+            echo "ERROR: ARTIFACTORY_USER or ARTIFACTORY_TOKEN secret is not set" >&2
+            exit 1
           fi
 
-          if [[ "$use_artifactory" == 'true' ]]; then
-            echo "Checking Artifactory access..."
-            if ! curl -sS -L -I \
-              --connect-timeout 15 \
-              --max-time 90 \
-              -u "$ARTIFACTORY_USER:$ARTIFACTORY_TOKEN" \
-              -o /dev/null \
-              -w 'HEAD HTTP:%{http_code} CONNECT:%{time_connect}s START:%{time_starttransfer}s TOTAL:%{time_total}s\n' \
-              "$ARTIFACTORY_DEFAULT_IMAGE_URL"; then
-              echo "Artifactory is unreachable from this runner"
-              use_artifactory='false'
-            fi
+          echo "Checking Artifactory access..."
+          if ! curl -sS -L -I \
+            --connect-timeout 15 \
+            --max-time 90 \
+            -u "$ARTIFACTORY_USER:$ARTIFACTORY_TOKEN" \
+            -o /dev/null \
+            -w 'HEAD HTTP:%{http_code} CONNECT:%{time_connect}s START:%{time_starttransfer}s TOTAL:%{time_total}s\n' \
+            "$ARTIFACTORY_DEFAULT_IMAGE_URL"; then
+            echo "ERROR: Artifactory is unreachable. Check network access or use a self-hosted runner." >&2
+            exit 1
           fi
 
-          if [[ "$use_artifactory" == 'true' ]]; then
-            echo "Downloading QEMU image tarball from Artifactory..."
-            curl -sS -fL \
-              --retry 3 \
-              --retry-delay 5 \
-              --connect-timeout 15 \
-              --max-time 600 \
-              -u "$ARTIFACTORY_USER:$ARTIFACTORY_TOKEN" \
-              -w 'GET HTTP:%{http_code} SIZE:%{size_download} TOTAL:%{time_total}s\n' \
-              "$ARTIFACTORY_DEFAULT_IMAGE_URL" \
-              -o "$image_tar"
+          echo "Downloading QEMU image tarball from Artifactory..."
+          curl -sS -fL \
+            --retry 3 \
+            --retry-delay 5 \
+            --connect-timeout 15 \
+            --max-time 600 \
+            -u "$ARTIFACTORY_USER:$ARTIFACTORY_TOKEN" \
+            -w 'GET HTTP:%{http_code} SIZE:%{size_download} TOTAL:%{time_total}s\n' \
+            "$ARTIFACTORY_DEFAULT_IMAGE_URL" \
+            -o "$image_tar"
 
-            # Verify tar.gz was downloaded completely
-            if [[ ! -f "$image_tar" ]]; then
-              echo "ERROR: Failed to download tar.gz from Artifactory" >&2
-              exit 1
-            fi
-            tar_size=$(stat -f%z "$image_tar" 2>/dev/null || stat -c%s "$image_tar" 2>/dev/null || echo 0)
-            echo "Downloaded tar.gz size: $tar_size bytes"
-            if (( tar_size < 10000000 )); then  # Less than 10MB is suspicious
-              echo "WARNING: Downloaded tar.gz is smaller than expected (${tar_size} bytes)" >&2
-            fi
+          rm -rf "$extract_dir"
+          mkdir -p "$extract_dir"
+          tar -xzf "$image_tar" -C "$extract_dir"
 
-            rm -rf "$extract_dir"
-            mkdir -p "$extract_dir"
-            
-            # Extract and verify
-            if ! tar -xzf "$image_tar" -C "$extract_dir"; then
-              echo "ERROR: Failed to extract tar.gz from Artifactory" >&2
-              exit 1
-            fi
-            
-            echo "Extracted files from tar.gz:"
-            find "$extract_dir" -type f -exec ls -lh {} \;
+          echo "Extracted tar contents:"
+          find "$extract_dir" -type f | xargs ls -lh
 
-            kernel_src="$(find "$extract_dir" -type f \( -name 'bzImage*' -o -name 'vmlinuz*' -o -name '*.bin' \) | head -n 1 || true)"
-            rootfs_src="$(find "$extract_dir" -type f \( -name '*.rootfs.ext4' -o -name 'rootfs.ext4' -o -name '*.ext4' \) | head -n 1 || true)"
-            
-            # Check extracted files sizes
-            if [[ -n "$rootfs_src" && -f "$rootfs_src" ]]; then
-              rootfs_size=$(stat -f%z "$rootfs_src" 2>/dev/null || stat -c%s "$rootfs_src" 2>/dev/null || echo 0)
-              echo "Extracted rootfs size: $rootfs_size bytes"
-              if (( rootfs_size < 500000000 )); then  # Less than 500MB is too small
-                echo "ERROR: Extracted rootfs is suspiciously small (${rootfs_size} bytes, expected >= 500MB)" >&2
-                echo "This indicates a truncated/incomplete download or extraction." >&2
-                exit 1
-              fi
-            fi
-          else
-            [[ "${ALLOW_REPO_IMAGE_FALLBACK:-false}" == 'true' ]] || {
-              echo "Artifactory unavailable and repository fallback disabled" >&2
-              exit 1
-            }
-            image_dir="$GITHUB_WORKSPACE/$QEMU_IMAGE_DIR"
-            kernel_src="$image_dir/$QEMU_KERNEL_FILE"
-            rootfs_src="$image_dir/$QEMU_ROOTFS_FILE"
-            echo "Using repository fallback images from: $image_dir"
-          fi
+          kernel_src="$(find "$extract_dir" -type f \( -name 'bzImage*' -o -name 'vmlinuz*' -o -name '*.bin' \) | head -n 1 || true)"
+          rootfs_src="$(find "$extract_dir" -type f \( -name '*.rootfs.ext4' -o -name 'rootfs.ext4' -o -name '*.ext4' \) | head -n 1 || true)"
 
           [[ -n "$kernel_src" && -f "$kernel_src" ]] || {
             echo "Kernel image not found in extracted artifact" >&2

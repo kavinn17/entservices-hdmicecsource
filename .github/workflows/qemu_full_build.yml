@@ -116,12 +116,42 @@ jobs:
               "$ARTIFACTORY_DEFAULT_IMAGE_URL" \
               -o "$image_tar"
 
+            # Verify tar.gz was downloaded completely
+            if [[ ! -f "$image_tar" ]]; then
+              echo "ERROR: Failed to download tar.gz from Artifactory" >&2
+              exit 1
+            fi
+            tar_size=$(stat -f%z "$image_tar" 2>/dev/null || stat -c%s "$image_tar" 2>/dev/null || echo 0)
+            echo "Downloaded tar.gz size: $tar_size bytes"
+            if (( tar_size < 10000000 )); then  # Less than 10MB is suspicious
+              echo "WARNING: Downloaded tar.gz is smaller than expected (${tar_size} bytes)" >&2
+            fi
+
             rm -rf "$extract_dir"
             mkdir -p "$extract_dir"
-            tar -xzf "$image_tar" -C "$extract_dir"
+            
+            # Extract and verify
+            if ! tar -xzf "$image_tar" -C "$extract_dir"; then
+              echo "ERROR: Failed to extract tar.gz from Artifactory" >&2
+              exit 1
+            fi
+            
+            echo "Extracted files from tar.gz:"
+            find "$extract_dir" -type f -exec ls -lh {} \;
 
             kernel_src="$(find "$extract_dir" -type f \( -name 'bzImage*' -o -name 'vmlinuz*' -o -name '*.bin' \) | head -n 1 || true)"
             rootfs_src="$(find "$extract_dir" -type f \( -name '*.rootfs.ext4' -o -name 'rootfs.ext4' -o -name '*.ext4' \) | head -n 1 || true)"
+            
+            # Check extracted files sizes
+            if [[ -n "$rootfs_src" && -f "$rootfs_src" ]]; then
+              rootfs_size=$(stat -f%z "$rootfs_src" 2>/dev/null || stat -c%s "$rootfs_src" 2>/dev/null || echo 0)
+              echo "Extracted rootfs size: $rootfs_size bytes"
+              if (( rootfs_size < 500000000 )); then  # Less than 500MB is too small
+                echo "ERROR: Extracted rootfs is suspiciously small (${rootfs_size} bytes, expected >= 500MB)" >&2
+                echo "This indicates a truncated/incomplete download or extraction." >&2
+                exit 1
+              fi
+            fi
           else
             [[ "${ALLOW_REPO_IMAGE_FALLBACK:-false}" == 'true' ]] || {
               echo "Artifactory unavailable and repository fallback disabled" >&2
@@ -150,9 +180,23 @@ jobs:
 
           cp -f "$kernel_src" "$QEMU_WORKDIR/kernel.bin"
           cp -f "$rootfs_src" "$QEMU_WORKDIR/rootfs.ext4"
+          
+          # Ensure files are readable by QEMU process
+          chmod 644 "$QEMU_WORKDIR/kernel.bin" "$QEMU_WORKDIR/rootfs.ext4"
 
           echo "Prepared runtime images in $QEMU_WORKDIR"
           ls -lh "$QEMU_WORKDIR/kernel.bin" "$QEMU_WORKDIR/rootfs.ext4"
+          
+          # Verify rootfs.ext4 is a valid ext4 filesystem (not truncated/corrupted)
+          echo "Verifying rootfs.ext4 integrity..."
+          file "$QEMU_WORKDIR/rootfs.ext4"
+          if ! file "$QEMU_WORKDIR/rootfs.ext4" | grep -qi 'ext4.*filesystem'; then
+            echo "ERROR: rootfs.ext4 is not a valid ext4 filesystem. File may be truncated or corrupted." >&2
+            echo "Expected: ext4 filesystem (at least 500M)" >&2
+            exit 1
+          fi
+          
+          # Compute checksums for debugging
           sha256sum "$QEMU_WORKDIR/kernel.bin" "$QEMU_WORKDIR/rootfs.ext4" || true
 
           run_script_src="$GITHUB_WORKSPACE/Tests/vDeviceTests/qemu-images/$QEMU_RUN_SCRIPT_FILE"
@@ -162,35 +206,6 @@ jobs:
           fi
 
           ls -lh "$QEMU_WORKDIR/"
-
-      - name: Inspect rootfs and kernel images
-        run: |
-          set -euo pipefail
-          apt-get install -y --no-install-recommends e2fsprogs file binutils 2>/dev/null || true
-
-          echo "===== kernel.bin file type ====="
-          file "$QEMU_WORKDIR/kernel.bin" || true
-
-          echo "===== rootfs.ext4 file type ====="
-          file "$QEMU_WORKDIR/rootfs.ext4" || true
-
-          echo "===== rootfs ext4 superblock info ====="
-          dumpe2fs -h "$QEMU_WORKDIR/rootfs.ext4" 2>&1 | head -40 || true
-
-          echo "===== rootfs filesystem check (read-only) ====="
-          e2fsck -n "$QEMU_WORKDIR/rootfs.ext4" 2>&1 | tail -10 || true
-
-          echo "===== rootfs root directory listing ====="
-          debugfs -R "ls -l /" "$QEMU_WORKDIR/rootfs.ext4" 2>/dev/null || true
-
-          echo "===== rootfs /lib/modules listing (kernel module dirs) ====="
-          debugfs -R "ls -l /lib/modules" "$QEMU_WORKDIR/rootfs.ext4" 2>/dev/null || true
-
-          echo "===== rootfs /etc/os-release ====="
-          debugfs -R "cat /etc/os-release" "$QEMU_WORKDIR/rootfs.ext4" 2>/dev/null || true
-
-          echo "===== rootfs used/free space ====="
-          debugfs -R "stats" "$QEMU_WORKDIR/rootfs.ext4" 2>/dev/null | grep -E 'Block count|Free blocks|Block size|Inode count|Free inodes' || true
 
       - name: Boot QEMU inside CI container
         run: |
@@ -211,13 +226,18 @@ jobs:
 
           echo "Launching QEMU with SSH forward host 127.0.0.1:${SSH_HOST_PORT} -> guest:22"
 
+          # Final check: rootfs must be readable
+          if [[ ! -r "$QEMU_WORKDIR/rootfs.ext4" ]]; then
+            echo "ERROR: rootfs.ext4 is not readable" >&2
+            stat "$QEMU_WORKDIR/rootfs.ext4"
+            exit 1
+          fi
+          
           qemu-system-x86_64 \
             $accel_args \
             -kernel "$QEMU_WORKDIR/kernel.bin" \
-            -append "console=ttyS0 earlyprintk=serial,ttyS0 loglevel=7 root=/dev/sda rw rootwait rootdelay=5 rootfstype=ext4 init=/sbin/init" \
-            -drive file="$QEMU_WORKDIR/rootfs.ext4",if=none,id=hd0,format=raw \
-            -device virtio-scsi-pci,id=scsi0 \
-            -device scsi-hd,drive=hd0,bus=scsi0.0 \
+            -append "console=ttyS0 earlyprintk=serial,ttyS0 loglevel=7 root=/dev/vda rw rootwait rootdelay=10 rootfstype=ext4 init=/sbin/init" \
+            -drive file="$QEMU_WORKDIR/rootfs.ext4",if=virtio,format=raw \
             -smp 4 \
             -m 2048 \
             -display none \
@@ -230,10 +250,13 @@ jobs:
           echo "QEMU started with PID: $(cat $QEMU_WORKDIR/qemu.pid)"
           if ! kill -0 "$(cat "$QEMU_WORKDIR/qemu.pid")" 2>/dev/null; then
             echo "QEMU process is not alive immediately after launch" >&2
+            echo "Checking serial output for early errors:" >&2
+            tail -n 30 "$QEMU_WORKDIR/serial.log" 2>/dev/null || true
             exit 1
           fi
-          echo "Initial serial output (if any):"
-          tail -n 30 "$QEMU_WORKDIR/serial.log" 2>/dev/null || true
+          echo "Initial serial output (checking for early boot errors):"
+          sleep 3  # Give QEMU time to start outputting
+          tail -n 50 "$QEMU_WORKDIR/serial.log" 2>/dev/null || true
 
       - name: Wait for SSH in guest
         env:

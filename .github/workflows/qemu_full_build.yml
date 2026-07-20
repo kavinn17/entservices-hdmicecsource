@@ -25,9 +25,9 @@ jobs:
       SSH_HOST_PORT_ALT: '5523'
       QEMU_SSH_USER: root
       QEMU_GUEST_LIB_DIR: /usr/lib/wpeframework/plugins
-      QEMU_IMAGE_DIR: Tests/vDeviceTests/qemu-images
-      QEMU_KERNEL_FILE: bzImage.bin
-      QEMU_ROOTFS_FILE: rootfs.ext4
+      ARTIFACTORY_DEFAULT_IMAGE_URL: https://artifactory.comcast.com/artifactory/vdevice-generic/DefaultImage.tar.gz
+      ARTIFACTORY_USER: ${{ secrets.ARTIFACTORY_USER }}
+      ARTIFACTORY_TOKEN: ${{ secrets.ARTIFACTORY_TOKEN }}
       QEMU_RUN_SCRIPT_FILE: run_qemu.sh
 
     steps:
@@ -68,22 +68,43 @@ jobs:
             ca-certificates \
             netcat-openbsd
 
-      - name: Prepare kernel, rootfs and run script from repository (LFS)
+      - name: Download and prepare kernel/rootfs from Artifactory
         run: |
           set -euo pipefail
           mkdir -p "$QEMU_WORKDIR"
-          image_dir="$GITHUB_WORKSPACE/$QEMU_IMAGE_DIR"
 
-          kernel_src="$image_dir/$QEMU_KERNEL_FILE"
-          rootfs_src="$image_dir/$QEMU_ROOTFS_FILE"
-          run_script_src="$image_dir/$QEMU_RUN_SCRIPT_FILE"
+          image_tar="$QEMU_WORKDIR/DefaultImage.tar.gz"
+          extract_dir="$QEMU_WORKDIR/image"
 
-          [[ -f "$kernel_src" ]] || { echo "Missing kernel image: $kernel_src" >&2; exit 1; }
-          [[ -f "$rootfs_src" ]] || { echo "Missing rootfs image: $rootfs_src" >&2; exit 1; }
+          curl_args=(-fL --retry 3 --retry-delay 5)
+          if [[ -n "${ARTIFACTORY_USER:-}" && -n "${ARTIFACTORY_TOKEN:-}" ]]; then
+            curl_args+=( -u "$ARTIFACTORY_USER:$ARTIFACTORY_TOKEN" )
+          fi
+
+          curl "${curl_args[@]}" "$ARTIFACTORY_DEFAULT_IMAGE_URL" -o "$image_tar"
+
+          rm -rf "$extract_dir"
+          mkdir -p "$extract_dir"
+          tar -xzf "$image_tar" -C "$extract_dir"
+
+          kernel_src="$(find "$extract_dir" -type f \( -name 'bzImage*' -o -name 'vmlinuz*' -o -name '*.bin' \) | head -n 1 || true)"
+          rootfs_src="$(find "$extract_dir" -type f \( -name '*.rootfs.ext4' -o -name 'rootfs.ext4' -o -name '*.ext4' \) | head -n 1 || true)"
+
+          [[ -n "$kernel_src" && -f "$kernel_src" ]] || {
+            echo "Kernel image not found in extracted artifact" >&2
+            find "$extract_dir" -maxdepth 4 -type f | sed 's/^/  - /' >&2 || true
+            exit 1
+          }
+          [[ -n "$rootfs_src" && -f "$rootfs_src" ]] || {
+            echo "Rootfs image not found in extracted artifact" >&2
+            find "$extract_dir" -maxdepth 4 -type f | sed 's/^/  - /' >&2 || true
+            exit 1
+          }
 
           cp -f "$kernel_src" "$QEMU_WORKDIR/kernel.bin"
           cp -f "$rootfs_src" "$QEMU_WORKDIR/rootfs.ext4"
 
+          run_script_src="$GITHUB_WORKSPACE/Tests/vDeviceTests/qemu-images/$QEMU_RUN_SCRIPT_FILE"
           if [[ -f "$run_script_src" ]]; then
             cp -f "$run_script_src" "$QEMU_WORKDIR/run_qemu.sh"
             chmod +x "$QEMU_WORKDIR/run_qemu.sh"

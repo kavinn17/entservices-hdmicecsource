@@ -27,11 +27,12 @@ jobs:
       QEMU_GUEST_LIB_DIR: /usr/lib/wpeframework/plugins
       SKIP_COMPONENT_BUILD: 'true'
       ALLOW_REPO_IMAGE_FALLBACK: 'true'
+      REQUIRE_ARTIFACTORY: 'false'
       QEMU_IMAGE_DIR: Tests/vDeviceTests/qemu-images
       QEMU_KERNEL_FILE: bzImage.bin
       QEMU_ROOTFS_FILE: rootfs.ext4
       ARTIFACTORY_DEFAULT_IMAGE_URL: https://artifactory.comcast.com:443/artifactory/vdevice-generic/DefaultImage.tar.gz
-      ARTIFACTORY_USER: ${{ secrets.ARTIFACTORY_VDEVICE_USER }}
+      ARTIFACTORY_USER: ${{ vars.ARTIFACTORY_VDEVICE_USER }}
       ARTIFACTORY_TOKEN: ${{ secrets.ARTIFACTORY_VDEVICE_TOKEN }}
       QEMU_RUN_SCRIPT_FILE: run_qemu.sh
 
@@ -73,8 +74,44 @@ jobs:
             qemu-system-x86 \
             openssh-client \
             curl \
+            e2fsprogs \
             ca-certificates \
             netcat-openbsd
+
+      - name: Install download tools
+        run: |
+          set -euo pipefail
+          # curl and openssl already available in base image
+          curl --version | head -n 1
+          openssl version
+
+      - name: Verify Artifactory credentials and connectivity
+        run: |
+          set -euo pipefail
+          echo "=== Artifactory Credential Check ==="
+          echo "ARTIFACTORY_USER set: $( [[ -n "${ARTIFACTORY_USER:-}" ]] && echo YES || echo NO )"
+          echo "ARTIFACTORY_TOKEN set: $( [[ -n "${ARTIFACTORY_TOKEN:-}" ]] && echo YES || echo NO )"
+          echo "ARTIFACTORY_USER length: ${#ARTIFACTORY_USER}"
+          echo "ARTIFACTORY_TOKEN length: ${#ARTIFACTORY_TOKEN}"
+          echo "Target URL: $ARTIFACTORY_DEFAULT_IMAGE_URL"
+          echo "=== Network Connectivity Check ==="
+          if nc -z -w10 artifactory.comcast.com 443 2>/dev/null; then
+            echo "✓ artifactory.comcast.com:443 is reachable"
+          else
+            echo "⚠ artifactory.comcast.com:443 is NOT reachable from this ubuntu-latest runner"
+            echo "⚠ Comcast Artifactory is on internal network. Attempting curl anyway..."
+            echo "⚠ If download fails: use self-hosted runner with VPN/internal access"
+          fi
+
+          echo "=== Artifactory HTTP HEAD Check ==="
+          if curl -sS -I -u "${ARTIFACTORY_USER}:${ARTIFACTORY_TOKEN}" \
+            --connect-timeout 20 \
+            --max-time 60 \
+            "$ARTIFACTORY_DEFAULT_IMAGE_URL" | head -n 1; then
+            echo "HEAD probe completed"
+          else
+            echo "HEAD probe failed (this often means network path is blocked from ubuntu-latest)"
+          fi
 
       - name: Download and prepare kernel/rootfs from Artifactory
         run: |
@@ -86,67 +123,122 @@ jobs:
 
           use_artifactory='true'
           if [[ -z "${ARTIFACTORY_USER:-}" || -z "${ARTIFACTORY_TOKEN:-}" ]]; then
+            if [[ "${REQUIRE_ARTIFACTORY:-true}" == 'true' ]]; then
+              echo "ERROR: Artifactory secrets are missing." >&2
+              echo "Required secrets: ARTIFACTORY_VDEVICE_USER, ARTIFACTORY_VDEVICE_TOKEN" >&2
+              exit 1
+            fi
             echo "Artifactory secrets missing; falling back to repository images"
             use_artifactory='false'
           fi
 
           if [[ "$use_artifactory" == 'true' ]]; then
-            echo "Checking Artifactory access..."
-            if ! wget --spider --quiet --user="$ARTIFACTORY_USER" --password="$ARTIFACTORY_TOKEN" \
-              --timeout=15 --tries=1 \
+            echo "Downloading QEMU image tarball via curl from Artifactory (~150MB, may take ~1min)..."
+            echo "URL: $ARTIFACTORY_DEFAULT_IMAGE_URL"
+            
+            # Create temporary file for download
+            temp_tar="/tmp/DefaultImage_download.tar.gz"
+            
+            # Use curl with basic auth (username:token)
+            if curl -f -u "${ARTIFACTORY_USER}:${ARTIFACTORY_TOKEN}" \
+              --location \
+              --ipv4 \
+              --retry 5 \
+              --retry-delay 10 \
+              --retry-all-errors \
+              --retry-max-time 1200 \
+              --connect-timeout 120 \
+              --max-time 1800 \
+              --progress-bar \
+              -o "$temp_tar" \
               "$ARTIFACTORY_DEFAULT_IMAGE_URL"; then
-              echo "Artifactory is unreachable from this runner"
+              
+              echo "✓ Download succeeded, verifying file..."
+              mv "$temp_tar" "$image_tar"
+            else
+              download_rc=$?
+              echo "curl download failed with exit code $download_rc" >&2
+              
+              if [[ "${REQUIRE_ARTIFACTORY:-true}" == 'true' ]]; then
+                echo "ERROR: Failed to download tar.gz from Artifactory via curl." >&2
+                echo "Check:" >&2
+                echo "  1. ARTIFACTORY_VDEVICE_USER and ARTIFACTORY_VDEVICE_TOKEN are set" >&2
+                echo "  2. Credentials are valid (username and token)" >&2
+                echo "  3. Network can reach artifactory.comcast.com:443" >&2
+                echo "  4. File exists: vdevice-generic/DefaultImage.tar.gz" >&2
+                exit 1
+              fi
+              echo "Artifactory download failed; falling back to repository images"
+              if [[ "$download_rc" == '28' ]]; then
+                echo "curl exit 28 indicates timeout/network path issue from runner to Artifactory"
+              fi
               use_artifactory='false'
             fi
-          fi
 
-          if [[ "$use_artifactory" == 'true' ]]; then
-            echo "Downloading QEMU image tarball from Artifactory..."
-            if ! wget --user="$ARTIFACTORY_USER" --password="$ARTIFACTORY_TOKEN" \
-              --timeout=15 --tries=3 --waitretry=5 \
-              -O "$image_tar" \
-              "$ARTIFACTORY_DEFAULT_IMAGE_URL"; then
-              echo "ERROR: Failed to download tar.gz from Artifactory" >&2
-              exit 1
+            if [[ "$use_artifactory" == 'false' ]]; then
+              [[ "${ALLOW_REPO_IMAGE_FALLBACK:-false}" == 'true' ]] || {
+                echo "Artifactory unavailable and repository fallback disabled" >&2
+                exit 1
+              }
+              image_dir="$GITHUB_WORKSPACE/$QEMU_IMAGE_DIR"
+              kernel_src="$image_dir/$QEMU_KERNEL_FILE"
+              rootfs_src="$image_dir/$QEMU_ROOTFS_FILE"
+              echo "Using repository fallback images from: $image_dir"
             fi
 
             # Verify tar.gz was downloaded completely
-            if [[ ! -f "$image_tar" ]]; then
+            if [[ "$use_artifactory" == 'true' && ! -f "$image_tar" ]]; then
               echo "ERROR: Failed to download tar.gz from Artifactory" >&2
               exit 1
             fi
-            tar_size=$(stat -f%z "$image_tar" 2>/dev/null || stat -c%s "$image_tar" 2>/dev/null || echo 0)
-            echo "Downloaded tar.gz size: $tar_size bytes"
-            if (( tar_size < 10000000 )); then  # Less than 10MB is suspicious
-              echo "WARNING: Downloaded tar.gz is smaller than expected (${tar_size} bytes)" >&2
-            fi
+            if [[ "$use_artifactory" == 'true' ]]; then
+              tar_size=$(stat -f%z "$image_tar" 2>/dev/null || stat -c%s "$image_tar" 2>/dev/null || echo 0)
+              echo "Downloaded tar.gz size: $tar_size bytes"
+              if (( tar_size < 10000000 )); then  # Less than 10MB is suspicious
+                echo "WARNING: Downloaded tar.gz is smaller than expected (${tar_size} bytes)" >&2
+              fi
 
-            rm -rf "$extract_dir"
-            mkdir -p "$extract_dir"
-            
-            # Extract and verify
-            if ! tar -xzf "$image_tar" -C "$extract_dir"; then
-              echo "ERROR: Failed to extract tar.gz from Artifactory" >&2
-              exit 1
-            fi
-            
-            echo "Extracted files from tar.gz:"
-            find "$extract_dir" -type f -exec ls -lh {} \;
-
-            kernel_src="$(find "$extract_dir" -type f \( -name 'bzImage*' -o -name 'vmlinuz*' -o -name '*.bin' \) | head -n 1 || true)"
-            rootfs_src="$(find "$extract_dir" -type f \( -name '*.rootfs.ext4' -o -name 'rootfs.ext4' -o -name '*.ext4' \) | head -n 1 || true)"
-            
-            # Check extracted files sizes
-            if [[ -n "$rootfs_src" && -f "$rootfs_src" ]]; then
-              rootfs_size=$(stat -f%z "$rootfs_src" 2>/dev/null || stat -c%s "$rootfs_src" 2>/dev/null || echo 0)
-              echo "Extracted rootfs size: $rootfs_size bytes (~$((rootfs_size / 1024 / 1024))M)"
-              
-              # Expected size is ~552M; accept anything >= 550MB
-              if (( rootfs_size < 550000000 )); then
-                echo "ERROR: Extracted rootfs is too small (${rootfs_size} bytes = $((rootfs_size / 1024 / 1024))M)" >&2
-                echo "Expected: >= 550MB (got $((rootfs_size / 1024 / 1024))M)" >&2
-                echo "This indicates a truncated/incomplete download from Artifactory." >&2
+              if ! gzip -t "$image_tar"; then
+                echo "ERROR: Downloaded tar.gz failed gzip integrity check" >&2
                 exit 1
+              fi
+
+              echo "Tarball top-level content preview:"
+              tar -tzf "$image_tar" | head -n 30
+
+              rm -rf "$extract_dir"
+              mkdir -p "$extract_dir"
+              
+              # Extract and verify
+              if ! tar -xzf "$image_tar" -C "$extract_dir"; then
+                echo "ERROR: Failed to extract tar.gz from Artifactory" >&2
+                exit 1
+              fi
+              
+              echo "Extracted files from tar.gz:"
+              find "$extract_dir" -type f -exec ls -lh {} \;
+
+              kernel_src="$(find "$extract_dir" -type f -name 'bzImage.bin' | head -n 1 || true)"
+              if [[ -z "$kernel_src" ]]; then
+                kernel_src="$(find "$extract_dir" -type f \( -name 'bzImage*' -o -name 'vmlinuz*' \) | head -n 1 || true)"
+              fi
+              rootfs_src="$(find "$extract_dir" -type f -name 'rootfs.ext4' | head -n 1 || true)"
+              if [[ -z "$rootfs_src" ]]; then
+                rootfs_src="$(find "$extract_dir" -type f \( -name '*.rootfs.ext4' -o -name '*.ext4' \) | head -n 1 || true)"
+              fi
+              
+              # Check extracted files sizes
+              if [[ -n "$rootfs_src" && -f "$rootfs_src" ]]; then
+                rootfs_size=$(stat -f%z "$rootfs_src" 2>/dev/null || stat -c%s "$rootfs_src" 2>/dev/null || echo 0)
+                echo "Extracted rootfs size: $rootfs_size bytes (~$((rootfs_size / 1024 / 1024))M)"
+                
+                # Expected size is ~552M; accept anything >= 550MB
+                if (( rootfs_size < 550000000 )); then
+                  echo "ERROR: Extracted rootfs is too small (${rootfs_size} bytes = $((rootfs_size / 1024 / 1024))M)" >&2
+                  echo "Expected: >= 550MB (got $((rootfs_size / 1024 / 1024))M)" >&2
+                  echo "This indicates a truncated/incomplete download from Artifactory." >&2
+                  exit 1
+                fi
               fi
             fi
           else
@@ -161,13 +253,25 @@ jobs:
           fi
 
           [[ -n "$kernel_src" && -f "$kernel_src" ]] || {
-            echo "Kernel image not found in extracted artifact" >&2
-            find "$extract_dir" -maxdepth 4 -type f | sed 's/^/  - /' >&2 || true
+            echo "ERROR: Kernel image not found" >&2
+            echo "Expected path: ${kernel_src:-<not set>}" >&2
+            if [[ -n "${image_dir:-}" ]]; then
+              echo "Repo image dir contents:" >&2
+              find "$image_dir" -maxdepth 3 -type f 2>/dev/null | sed 's/^/  - /' >&2 || echo "  (directory empty or missing)" >&2
+            elif [[ -d "${extract_dir:-}" ]]; then
+              find "$extract_dir" -maxdepth 4 -type f | sed 's/^/  - /' >&2 || true
+            fi
             exit 1
           }
           [[ -n "$rootfs_src" && -f "$rootfs_src" ]] || {
-            echo "Rootfs image not found in extracted artifact" >&2
-            find "$extract_dir" -maxdepth 4 -type f | sed 's/^/  - /' >&2 || true
+            echo "ERROR: Rootfs image not found" >&2
+            echo "Expected path: ${rootfs_src:-<not set>}" >&2
+            if [[ -n "${image_dir:-}" ]]; then
+              echo "Repo image dir contents:" >&2
+              find "$image_dir" -maxdepth 3 -type f 2>/dev/null | sed 's/^/  - /' >&2 || echo "  (directory empty or missing)" >&2
+            elif [[ -d "${extract_dir:-}" ]]; then
+              find "$extract_dir" -maxdepth 4 -type f | sed 's/^/  - /' >&2 || true
+            fi
             exit 1
           }
 
@@ -214,6 +318,17 @@ jobs:
           if ! file "$QEMU_WORKDIR/rootfs.ext4" | grep -qi 'ext4.*filesystem'; then
             echo "ERROR: rootfs.ext4 is not a valid ext4 filesystem. File may be truncated or corrupted." >&2
             exit 1
+          fi
+
+          # Non-destructive ext4 consistency check (read-only)
+          if ! e2fsck -fn "$QEMU_WORKDIR/rootfs.ext4" >/tmp/qemu-artifacts/e2fsck.log 2>&1; then
+            rc=$?
+            if (( rc >= 8 )); then
+              echo "ERROR: e2fsck reported fatal filesystem issues (exit $rc)" >&2
+              tail -n 50 /tmp/qemu-artifacts/e2fsck.log >&2 || true
+              exit 1
+            fi
+            echo "e2fsck reported non-fatal filesystem issues (exit $rc); continuing"
           fi
           
           # Verify file permissions and readability
@@ -317,6 +432,12 @@ jobs:
               echo "SSH readiness attempt $attempt/240 on port $SSH_HOST_PORT"
             fi
 
+            if grep -Eqi 'Kernel panic|VFS: Unable to mount root fs|not syncing' "$QEMU_WORKDIR/serial.log" 2>/dev/null; then
+              echo "Detected kernel panic/rootfs mount failure in serial log" >&2
+              tail -n 120 "$QEMU_WORKDIR/serial.log" >&2 || true
+              exit 1
+            fi
+
             # Print serial log progress every 30 attempts (~2.5 min)
             if (( attempt % 30 == 0 )); then
               echo "--- boot progress at attempt $attempt ---"
@@ -408,3 +529,5 @@ jobs:
             /tmp/qemu-artifacts/*.log
             /tmp/qemu-artifacts/*.pid
             /tmp/qemu-artifacts/serial.log
+
+

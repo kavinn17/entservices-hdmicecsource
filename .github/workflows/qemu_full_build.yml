@@ -13,7 +13,7 @@ on:
 jobs:
   build-and-deploy-to-qemu:
     name: Build entservices-hdmicecsource and deploy into QEMU
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64]
     container:
       image: ghcr.io/rdkcentral/docker-rdk-ci:latest
     defaults:

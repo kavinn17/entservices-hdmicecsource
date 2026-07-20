@@ -34,7 +34,6 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
 
       - name: Build dependencies
         if: ${{ env.SKIP_COMPONENT_BUILD != 'true' }}

@@ -76,12 +76,28 @@ jobs:
           image_tar="$QEMU_WORKDIR/DefaultImage.tar.gz"
           extract_dir="$QEMU_WORKDIR/image"
 
-          curl_args=(-fL --retry 3 --retry-delay 5)
-          if [[ -n "${ARTIFACTORY_USER:-}" && -n "${ARTIFACTORY_TOKEN:-}" ]]; then
-            curl_args+=( -u "$ARTIFACTORY_USER:$ARTIFACTORY_TOKEN" )
-          fi
+          [[ -n "${ARTIFACTORY_USER:-}" ]] || { echo "ARTIFACTORY_USER secret is missing" >&2; exit 1; }
+          [[ -n "${ARTIFACTORY_TOKEN:-}" ]] || { echo "ARTIFACTORY_TOKEN secret is missing" >&2; exit 1; }
 
-          curl "${curl_args[@]}" "$ARTIFACTORY_DEFAULT_IMAGE_URL" -o "$image_tar"
+          echo "Checking Artifactory access..."
+          curl -sS -L -I \
+            --connect-timeout 15 \
+            --max-time 90 \
+            -u "$ARTIFACTORY_USER:$ARTIFACTORY_TOKEN" \
+            -o /dev/null \
+            -w 'HEAD HTTP:%{http_code} CONNECT:%{time_connect}s START:%{time_starttransfer}s TOTAL:%{time_total}s\n' \
+            "$ARTIFACTORY_DEFAULT_IMAGE_URL"
+
+          echo "Downloading QEMU image tarball from Artifactory..."
+          curl -sS -fL \
+            --retry 3 \
+            --retry-delay 5 \
+            --connect-timeout 15 \
+            --max-time 600 \
+            -u "$ARTIFACTORY_USER:$ARTIFACTORY_TOKEN" \
+            -w 'GET HTTP:%{http_code} SIZE:%{size_download} TOTAL:%{time_total}s\n' \
+            "$ARTIFACTORY_DEFAULT_IMAGE_URL" \
+            -o "$image_tar"
 
           rm -rf "$extract_dir"
           mkdir -p "$extract_dir"

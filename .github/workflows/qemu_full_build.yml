@@ -26,6 +26,10 @@ jobs:
       QEMU_SSH_USER: root
       QEMU_GUEST_LIB_DIR: /usr/lib/wpeframework/plugins
       SKIP_COMPONENT_BUILD: 'true'
+      ALLOW_REPO_IMAGE_FALLBACK: 'true'
+      QEMU_IMAGE_DIR: Tests/vDeviceTests/qemu-images
+      QEMU_KERNEL_FILE: bzImage.bin
+      QEMU_ROOTFS_FILE: rootfs.ext4
       ARTIFACTORY_DEFAULT_IMAGE_URL: https://artifactory.comcast.com/artifactory/vdevice-generic/DefaultImage.tar.gz
       ARTIFACTORY_USER: ${{ secrets.ARTIFACTORY_USER }}
       ARTIFACTORY_TOKEN: ${{ secrets.ARTIFACTORY_TOKEN }}
@@ -80,35 +84,54 @@ jobs:
           image_tar="$QEMU_WORKDIR/DefaultImage.tar.gz"
           extract_dir="$QEMU_WORKDIR/image"
 
-          [[ -n "${ARTIFACTORY_USER:-}" ]] || { echo "ARTIFACTORY_USER secret is missing" >&2; exit 1; }
-          [[ -n "${ARTIFACTORY_TOKEN:-}" ]] || { echo "ARTIFACTORY_TOKEN secret is missing" >&2; exit 1; }
+          use_artifactory='true'
+          if [[ -z "${ARTIFACTORY_USER:-}" || -z "${ARTIFACTORY_TOKEN:-}" ]]; then
+            echo "Artifactory secrets missing; falling back to repository images"
+            use_artifactory='false'
+          fi
 
-          echo "Checking Artifactory access..."
-          curl -sS -L -I \
-            --connect-timeout 15 \
-            --max-time 90 \
-            -u "$ARTIFACTORY_USER:$ARTIFACTORY_TOKEN" \
-            -o /dev/null \
-            -w 'HEAD HTTP:%{http_code} CONNECT:%{time_connect}s START:%{time_starttransfer}s TOTAL:%{time_total}s\n' \
-            "$ARTIFACTORY_DEFAULT_IMAGE_URL"
+          if [[ "$use_artifactory" == 'true' ]]; then
+            echo "Checking Artifactory access..."
+            if ! curl -sS -L -I \
+              --connect-timeout 15 \
+              --max-time 90 \
+              -u "$ARTIFACTORY_USER:$ARTIFACTORY_TOKEN" \
+              -o /dev/null \
+              -w 'HEAD HTTP:%{http_code} CONNECT:%{time_connect}s START:%{time_starttransfer}s TOTAL:%{time_total}s\n' \
+              "$ARTIFACTORY_DEFAULT_IMAGE_URL"; then
+              echo "Artifactory is unreachable from this runner"
+              use_artifactory='false'
+            fi
+          fi
 
-          echo "Downloading QEMU image tarball from Artifactory..."
-          curl -sS -fL \
-            --retry 3 \
-            --retry-delay 5 \
-            --connect-timeout 15 \
-            --max-time 600 \
-            -u "$ARTIFACTORY_USER:$ARTIFACTORY_TOKEN" \
-            -w 'GET HTTP:%{http_code} SIZE:%{size_download} TOTAL:%{time_total}s\n' \
-            "$ARTIFACTORY_DEFAULT_IMAGE_URL" \
-            -o "$image_tar"
+          if [[ "$use_artifactory" == 'true' ]]; then
+            echo "Downloading QEMU image tarball from Artifactory..."
+            curl -sS -fL \
+              --retry 3 \
+              --retry-delay 5 \
+              --connect-timeout 15 \
+              --max-time 600 \
+              -u "$ARTIFACTORY_USER:$ARTIFACTORY_TOKEN" \
+              -w 'GET HTTP:%{http_code} SIZE:%{size_download} TOTAL:%{time_total}s\n' \
+              "$ARTIFACTORY_DEFAULT_IMAGE_URL" \
+              -o "$image_tar"
 
-          rm -rf "$extract_dir"
-          mkdir -p "$extract_dir"
-          tar -xzf "$image_tar" -C "$extract_dir"
+            rm -rf "$extract_dir"
+            mkdir -p "$extract_dir"
+            tar -xzf "$image_tar" -C "$extract_dir"
 
-          kernel_src="$(find "$extract_dir" -type f \( -name 'bzImage*' -o -name 'vmlinuz*' -o -name '*.bin' \) | head -n 1 || true)"
-          rootfs_src="$(find "$extract_dir" -type f \( -name '*.rootfs.ext4' -o -name 'rootfs.ext4' -o -name '*.ext4' \) | head -n 1 || true)"
+            kernel_src="$(find "$extract_dir" -type f \( -name 'bzImage*' -o -name 'vmlinuz*' -o -name '*.bin' \) | head -n 1 || true)"
+            rootfs_src="$(find "$extract_dir" -type f \( -name '*.rootfs.ext4' -o -name 'rootfs.ext4' -o -name '*.ext4' \) | head -n 1 || true)"
+          else
+            [[ "${ALLOW_REPO_IMAGE_FALLBACK:-false}" == 'true' ]] || {
+              echo "Artifactory unavailable and repository fallback disabled" >&2
+              exit 1
+            }
+            image_dir="$GITHUB_WORKSPACE/$QEMU_IMAGE_DIR"
+            kernel_src="$image_dir/$QEMU_KERNEL_FILE"
+            rootfs_src="$image_dir/$QEMU_ROOTFS_FILE"
+            echo "Using repository fallback images from: $image_dir"
+          fi
 
           [[ -n "$kernel_src" && -f "$kernel_src" ]] || {
             echo "Kernel image not found in extracted artifact" >&2

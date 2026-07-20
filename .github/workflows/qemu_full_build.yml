@@ -185,8 +185,10 @@ jobs:
           qemu-system-x86_64 \
             $accel_args \
             -kernel "$QEMU_WORKDIR/kernel.bin" \
-            -append "console=ttyS0 earlyprintk=serial,ttyS0 loglevel=7 root=/dev/vda rw rootwait rootdelay=5 rootfstype=ext4 init=/sbin/init" \
-            -drive file="$QEMU_WORKDIR/rootfs.ext4",if=virtio,format=raw \
+            -append "console=ttyS0 earlyprintk=serial,ttyS0 loglevel=7 root=/dev/sda rw rootwait rootdelay=5 rootfstype=ext4 init=/sbin/init" \
+            -drive file="$QEMU_WORKDIR/rootfs.ext4",if=none,id=hd0,format=raw \
+            -device virtio-scsi-pci,id=scsi0 \
+            -device scsi-hd,drive=hd0,bus=scsi0.0 \
             -smp 4 \
             -m 2048 \
             -display none \

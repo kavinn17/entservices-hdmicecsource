@@ -25,6 +25,7 @@ jobs:
       SSH_HOST_PORT_ALT: '5523'
       QEMU_SSH_USER: root
       QEMU_GUEST_LIB_DIR: /usr/lib/wpeframework/plugins
+      SKIP_COMPONENT_BUILD: 'true'
       ARTIFACTORY_DEFAULT_IMAGE_URL: https://artifactory.comcast.com/artifactory/vdevice-generic/DefaultImage.tar.gz
       ARTIFACTORY_USER: ${{ secrets.ARTIFACTORY_USER }}
       ARTIFACTORY_TOKEN: ${{ secrets.ARTIFACTORY_TOKEN }}
@@ -37,14 +38,17 @@ jobs:
           lfs: true
 
       - name: Build dependencies
+        if: ${{ env.SKIP_COMPONENT_BUILD != 'true' }}
         run: |
           sh -x build_dependencies.sh
 
       - name: Build entservices-hdmicecsource
+        if: ${{ env.SKIP_COMPONENT_BUILD != 'true' }}
         run: |
           sh -x cov_build.sh
 
       - name: Collect plugin artifacts
+        if: ${{ env.SKIP_COMPONENT_BUILD != 'true' }}
         run: |
           set -euo pipefail
           mkdir -p artifacts/plugins
@@ -205,6 +209,7 @@ jobs:
           exit 1
 
       - name: Copy new plugin .so into QEMU
+        if: ${{ env.SKIP_COMPONENT_BUILD != 'true' }}
         env:
           QEMU_SSH_PRIVATE_KEY: ${{ secrets.QEMU_SSH_PRIVATE_KEY }}
         run: |

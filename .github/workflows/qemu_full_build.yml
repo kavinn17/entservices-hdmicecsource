@@ -1,0 +1,410 @@
+name: Build Component in Native Environment
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, qemu, 'sprint/**', 'release/**', topic/RDK*, develop, 'test/**' ]
+  pull_request:
+    branches: [ main, qemu, 'sprint/**', 'release/**', topic/RDK*, develop, 'test/**' ]
+
+jobs:
+  build-and-deploy-to-qemu:
+    name: Build entservices-hdmicecsource and deploy into QEMU
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/rdkcentral/docker-rdk-ci:latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      QEMU_WORKDIR: /tmp/qemu-artifacts
+      SSH_HOST_PORT: '5522'
+      SSH_HOST_PORT_ALT: '5523'
+      QEMU_SSH_USER: root
+      QEMU_GUEST_LIB_DIR: /usr/lib/wpeframework/plugins
+      SKIP_COMPONENT_BUILD: 'true'
+      ALLOW_REPO_IMAGE_FALLBACK: 'true'
+      QEMU_IMAGE_DIR: Tests/vDeviceTests/qemu-images
+      QEMU_KERNEL_FILE: bzImage.bin
+      QEMU_ROOTFS_FILE: rootfs.ext4
+      ARTIFACTORY_DEFAULT_IMAGE_URL: https://artifactory.comcast.com:443/artifactory/vdevice-generic/DefaultImage.tar.gz
+      ARTIFACTORY_USER: ${{ secrets.ARTIFACTORY_VDEVICE_USER }}
+      ARTIFACTORY_TOKEN: ${{ secrets.ARTIFACTORY_VDEVICE_TOKEN }}
+      QEMU_RUN_SCRIPT_FILE: run_qemu.sh
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Build dependencies
+        if: ${{ env.SKIP_COMPONENT_BUILD != 'true' }}
+        run: |
+          sh -x build_dependencies.sh
+
+      - name: Build entservices-hdmicecsource
+        if: ${{ env.SKIP_COMPONENT_BUILD != 'true' }}
+        run: |
+          sh -x cov_build.sh
+
+      - name: Collect plugin artifacts
+        if: ${{ env.SKIP_COMPONENT_BUILD != 'true' }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/plugins
+          find "$PWD/install" -type f -name '*.so' | grep '/plugins/' | tee artifacts/plugins/so-list.txt
+          while IFS= read -r sofile; do
+            cp -v "$sofile" artifacts/plugins/
+          done < artifacts/plugins/so-list.txt
+          test -n "$(ls -A artifacts/plugins/*.so 2>/dev/null || true)" || {
+            echo "No plugin .so files found under install path" >&2
+            exit 1
+          }
+
+      - name: Install QEMU and SSH tools
+        run: |
+          set -euo pipefail
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            qemu-system-x86 \
+            openssh-client \
+            curl \
+            ca-certificates \
+            netcat-openbsd
+
+      - name: Download and prepare kernel/rootfs from Artifactory
+        run: |
+          set -euo pipefail
+          mkdir -p "$QEMU_WORKDIR"
+
+          image_tar="$QEMU_WORKDIR/DefaultImage.tar.gz"
+          extract_dir="$QEMU_WORKDIR/image"
+
+          use_artifactory='true'
+          if [[ -z "${ARTIFACTORY_USER:-}" || -z "${ARTIFACTORY_TOKEN:-}" ]]; then
+            echo "Artifactory secrets missing; falling back to repository images"
+            use_artifactory='false'
+          fi
+
+          if [[ "$use_artifactory" == 'true' ]]; then
+            echo "Checking Artifactory access..."
+            if ! wget --spider --quiet --user="$ARTIFACTORY_USER" --password="$ARTIFACTORY_TOKEN" \
+              --timeout=15 --tries=1 \
+              "$ARTIFACTORY_DEFAULT_IMAGE_URL"; then
+              echo "Artifactory is unreachable from this runner"
+              use_artifactory='false'
+            fi
+          fi
+
+          if [[ "$use_artifactory" == 'true' ]]; then
+            echo "Downloading QEMU image tarball from Artifactory..."
+            if ! wget --user="$ARTIFACTORY_USER" --password="$ARTIFACTORY_TOKEN" \
+              --timeout=15 --tries=3 --waitretry=5 \
+              -O "$image_tar" \
+              "$ARTIFACTORY_DEFAULT_IMAGE_URL"; then
+              echo "ERROR: Failed to download tar.gz from Artifactory" >&2
+              exit 1
+            fi
+
+            # Verify tar.gz was downloaded completely
+            if [[ ! -f "$image_tar" ]]; then
+              echo "ERROR: Failed to download tar.gz from Artifactory" >&2
+              exit 1
+            fi
+            tar_size=$(stat -f%z "$image_tar" 2>/dev/null || stat -c%s "$image_tar" 2>/dev/null || echo 0)
+            echo "Downloaded tar.gz size: $tar_size bytes"
+            if (( tar_size < 10000000 )); then  # Less than 10MB is suspicious
+              echo "WARNING: Downloaded tar.gz is smaller than expected (${tar_size} bytes)" >&2
+            fi
+
+            rm -rf "$extract_dir"
+            mkdir -p "$extract_dir"
+            
+            # Extract and verify
+            if ! tar -xzf "$image_tar" -C "$extract_dir"; then
+              echo "ERROR: Failed to extract tar.gz from Artifactory" >&2
+              exit 1
+            fi
+            
+            echo "Extracted files from tar.gz:"
+            find "$extract_dir" -type f -exec ls -lh {} \;
+
+            kernel_src="$(find "$extract_dir" -type f \( -name 'bzImage*' -o -name 'vmlinuz*' -o -name '*.bin' \) | head -n 1 || true)"
+            rootfs_src="$(find "$extract_dir" -type f \( -name '*.rootfs.ext4' -o -name 'rootfs.ext4' -o -name '*.ext4' \) | head -n 1 || true)"
+            
+            # Check extracted files sizes
+            if [[ -n "$rootfs_src" && -f "$rootfs_src" ]]; then
+              rootfs_size=$(stat -f%z "$rootfs_src" 2>/dev/null || stat -c%s "$rootfs_src" 2>/dev/null || echo 0)
+              echo "Extracted rootfs size: $rootfs_size bytes (~$((rootfs_size / 1024 / 1024))M)"
+              
+              # Expected size is ~552M; accept anything >= 550MB
+              if (( rootfs_size < 550000000 )); then
+                echo "ERROR: Extracted rootfs is too small (${rootfs_size} bytes = $((rootfs_size / 1024 / 1024))M)" >&2
+                echo "Expected: >= 550MB (got $((rootfs_size / 1024 / 1024))M)" >&2
+                echo "This indicates a truncated/incomplete download from Artifactory." >&2
+                exit 1
+              fi
+            fi
+          else
+            [[ "${ALLOW_REPO_IMAGE_FALLBACK:-false}" == 'true' ]] || {
+              echo "Artifactory unavailable and repository fallback disabled" >&2
+              exit 1
+            }
+            image_dir="$GITHUB_WORKSPACE/$QEMU_IMAGE_DIR"
+            kernel_src="$image_dir/$QEMU_KERNEL_FILE"
+            rootfs_src="$image_dir/$QEMU_ROOTFS_FILE"
+            echo "Using repository fallback images from: $image_dir"
+          fi
+
+          [[ -n "$kernel_src" && -f "$kernel_src" ]] || {
+            echo "Kernel image not found in extracted artifact" >&2
+            find "$extract_dir" -maxdepth 4 -type f | sed 's/^/  - /' >&2 || true
+            exit 1
+          }
+          [[ -n "$rootfs_src" && -f "$rootfs_src" ]] || {
+            echo "Rootfs image not found in extracted artifact" >&2
+            find "$extract_dir" -maxdepth 4 -type f | sed 's/^/  - /' >&2 || true
+            exit 1
+          }
+
+          echo "Selected kernel source: $kernel_src"
+          echo "Selected rootfs source: $rootfs_src"
+          ls -lh "$kernel_src" "$rootfs_src"
+
+          cp -f "$kernel_src" "$QEMU_WORKDIR/kernel.bin"
+          cp -f "$rootfs_src" "$QEMU_WORKDIR/rootfs.ext4"
+          
+          # Set file permissions for QEMU and verify readability
+          # Reference: -rwxrwx--- (770) for group access; here using 644 for CI safety
+          chmod 644 "$QEMU_WORKDIR/kernel.bin" "$QEMU_WORKDIR/rootfs.ext4"
+          
+          echo "===== FILE SIZE & PERMISSION VERIFICATION ====="
+          echo "Prepared runtime images in $QEMU_WORKDIR"
+          ls -lh "$QEMU_WORKDIR/kernel.bin" "$QEMU_WORKDIR/rootfs.ext4"
+          
+          # Check file size after copy
+          kernel_size=$(stat -f%z "$QEMU_WORKDIR/kernel.bin" 2>/dev/null || stat -c%s "$QEMU_WORKDIR/kernel.bin" 2>/dev/null || echo 0)
+          final_rootfs_size=$(stat -f%z "$QEMU_WORKDIR/rootfs.ext4" 2>/dev/null || stat -c%s "$QEMU_WORKDIR/rootfs.ext4" 2>/dev/null || echo 0)
+          
+          echo "Kernel size: $kernel_size bytes (~$((kernel_size / 1024 / 1024))M)"
+          echo "Rootfs size: $final_rootfs_size bytes (~$((final_rootfs_size / 1024 / 1024))M)"
+          
+          # Verify sizes are within expected ranges
+          # Expected: kernel ~10-15M, rootfs ~550-560M
+          if (( kernel_size < 5000000 || kernel_size > 50000000 )); then
+            echo "WARNING: Kernel size seems unusual (${kernel_size} bytes = $((kernel_size / 1024 / 1024))M)" >&2
+            echo "Expected range: 5-50MB" >&2
+          fi
+          
+          if (( final_rootfs_size < 550000000 )); then
+            echo "ERROR: Rootfs is smaller than expected (${final_rootfs_size} bytes = $((final_rootfs_size / 1024 / 1024))M)" >&2
+            echo "Expected: >= 550MB (typical: ~552M)" >&2
+            echo "This is a CRITICAL error. File may be truncated or incomplete." >&2
+            exit 1
+          fi
+          
+          # Verify rootfs.ext4 is a valid ext4 filesystem (not truncated/corrupted)
+          echo "===== FILESYSTEM TYPE VERIFICATION ====="
+          file "$QEMU_WORKDIR/rootfs.ext4"
+          
+          if ! file "$QEMU_WORKDIR/rootfs.ext4" | grep -qi 'ext4.*filesystem'; then
+            echo "ERROR: rootfs.ext4 is not a valid ext4 filesystem. File may be truncated or corrupted." >&2
+            exit 1
+          fi
+          
+          # Verify file permissions and readability
+          echo "===== PERMISSION VERIFICATION ====="
+          stat -c '%A %U:%G %s %n' "$QEMU_WORKDIR/kernel.bin" "$QEMU_WORKDIR/rootfs.ext4" 2>/dev/null || \
+            stat -f '%Lp %Su:%Sg %z %N' "$QEMU_WORKDIR/kernel.bin" "$QEMU_WORKDIR/rootfs.ext4" || true
+          
+          if [[ ! -r "$QEMU_WORKDIR/kernel.bin" ]]; then
+            echo "ERROR: kernel.bin is not readable" >&2
+            exit 1
+          fi
+          
+          if [[ ! -r "$QEMU_WORKDIR/rootfs.ext4" ]]; then
+            echo "ERROR: rootfs.ext4 is not readable" >&2
+            exit 1
+          fi
+          
+          echo "✓ Both files are readable by QEMU process"
+          
+          # Compute checksums for debugging
+          echo "===== CHECKSUMS ====="
+          sha256sum "$QEMU_WORKDIR/kernel.bin" "$QEMU_WORKDIR/rootfs.ext4" || true
+
+          run_script_src="$GITHUB_WORKSPACE/Tests/vDeviceTests/qemu-images/$QEMU_RUN_SCRIPT_FILE"
+          if [[ -f "$run_script_src" ]]; then
+            cp -f "$run_script_src" "$QEMU_WORKDIR/run_qemu.sh"
+            chmod +x "$QEMU_WORKDIR/run_qemu.sh"
+          fi
+
+          ls -lh "$QEMU_WORKDIR/"
+
+      - name: Boot QEMU inside CI container
+        run: |
+          set -euo pipefail
+
+          echo "qemu-system-x86_64 version:"
+          qemu-system-x86_64 --version | head -n 1
+
+          # Use KVM if available for fast boot; fall back to TCG (slow ~5-10 min)
+          # TCG uses IvyBridge to match the validated run_qemu.sh CPU model
+          if [[ -r /dev/kvm ]]; then
+            accel_args="-machine q35,accel=kvm -enable-kvm -cpu host"
+            echo "KVM available, using hardware acceleration"
+          else
+            accel_args="-machine q35,accel=tcg -cpu IvyBridge"
+            echo "KVM not available, using software emulation with IvyBridge CPU (boot may take 5-10 minutes)"
+          fi
+
+          echo "Launching QEMU with SSH forward host 127.0.0.1:${SSH_HOST_PORT} -> guest:22"
+          
+          qemu-system-x86_64 \
+            $accel_args \
+            -kernel "$QEMU_WORKDIR/kernel.bin" \
+            -append "console=ttyS0 earlyprintk=serial,ttyS0 loglevel=7 root=/dev/vda rw rootwait rootdelay=10 rootfstype=ext4 init=/sbin/init" \
+            -drive file="$QEMU_WORKDIR/rootfs.ext4",if=virtio,format=raw \
+            -smp 4 \
+            -m 2048 \
+            -display none \
+            -serial file:"$QEMU_WORKDIR/serial.log" \
+            -netdev user,id=network0,hostfwd=tcp:127.0.0.1:${SSH_HOST_PORT}-:22 \
+            -device virtio-net-pci,netdev=network0 \
+            -daemonize \
+            -pidfile "$QEMU_WORKDIR/qemu.pid"
+
+          echo "QEMU started with PID: $(cat $QEMU_WORKDIR/qemu.pid)"
+          if ! kill -0 "$(cat "$QEMU_WORKDIR/qemu.pid")" 2>/dev/null; then
+            echo "QEMU process is not alive immediately after launch" >&2
+            echo "Checking serial output for early errors:" >&2
+            tail -n 30 "$QEMU_WORKDIR/serial.log" 2>/dev/null || true
+            exit 1
+          fi
+          echo "Initial serial output (checking for early boot errors):"
+          sleep 3  # Give QEMU time to start outputting
+          tail -n 50 "$QEMU_WORKDIR/serial.log" 2>/dev/null || true
+
+      - name: Wait for SSH in guest
+        env:
+          QEMU_SSH_PRIVATE_KEY: ${{ secrets.QEMU_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+
+          ssh_key_arg=()
+          if [[ -n "${QEMU_SSH_PRIVATE_KEY:-}" ]]; then
+            mkdir -p ~/.ssh
+            printf '%s\n' "$QEMU_SSH_PRIVATE_KEY" > ~/.ssh/qemu_id_rsa
+            chmod 600 ~/.ssh/qemu_id_rsa
+            ssh_key_arg=(-i ~/.ssh/qemu_id_rsa)
+          fi
+
+          user_candidates=("$QEMU_SSH_USER" "root" "rdk")
+
+          # Allow up to 20 min (240 x 5s); TCG emulation needs ~10 min to boot
+          for attempt in $(seq 1 240); do
+            # Abort early if QEMU process died
+            if [[ -f "$QEMU_WORKDIR/qemu.pid" ]] && ! kill -0 "$(cat "$QEMU_WORKDIR/qemu.pid")" 2>/dev/null; then
+              echo "QEMU process exited before SSH became ready" >&2
+              break
+            fi
+
+            if (( attempt == 1 || attempt % 20 == 0 )); then
+              echo "SSH readiness attempt $attempt/240 on port $SSH_HOST_PORT"
+            fi
+
+            # Print serial log progress every 30 attempts (~2.5 min)
+            if (( attempt % 30 == 0 )); then
+              echo "--- boot progress at attempt $attempt ---"
+              tail -n 20 "$QEMU_WORKDIR/serial.log" 2>/dev/null || true
+            fi
+
+            if nc -z -w2 127.0.0.1 "$SSH_HOST_PORT" 2>/dev/null; then
+              echo "TCP port $SSH_HOST_PORT is open; checking SSH login for candidate users"
+              for ssh_user in "${user_candidates[@]}"; do
+                if ssh "${ssh_key_arg[@]}" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -p "$SSH_HOST_PORT" "$ssh_user@127.0.0.1" 'echo SSH_READY' 2>/dev/null; then
+                  echo "QEMU_SSH_PORT=$SSH_HOST_PORT" > "$QEMU_WORKDIR/ssh-target.env"
+                  echo "QEMU_SSH_USER=$ssh_user" >> "$QEMU_WORKDIR/ssh-target.env"
+                  echo "SSH ready as user: $ssh_user"
+                  exit 0
+                fi
+              done
+            fi
+            sleep 5
+          done
+
+          echo "QEMU guest SSH did not become ready in time" >&2
+          echo "----- last 100 lines of serial.log -----" >&2
+          tail -n 100 "$QEMU_WORKDIR/serial.log" >&2 || true
+          exit 1
+
+      - name: Inspect guest block devices and mounts
+        env:
+          QEMU_SSH_PRIVATE_KEY: ${{ secrets.QEMU_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+
+          if [[ -f "$QEMU_WORKDIR/ssh-target.env" ]]; then
+            # shellcheck disable=SC1090
+            source "$QEMU_WORKDIR/ssh-target.env"
+          fi
+
+          selected_ssh_port="${QEMU_SSH_PORT:-$SSH_HOST_PORT}"
+          selected_ssh_user="${QEMU_SSH_USER:-root}"
+
+          ssh_key_arg=()
+          if [[ -n "${QEMU_SSH_PRIVATE_KEY:-}" ]]; then
+            ssh_key_arg=(-i ~/.ssh/qemu_id_rsa)
+          fi
+
+          ssh "${ssh_key_arg[@]}" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$selected_ssh_port" "$selected_ssh_user@127.0.0.1" '
+            echo "===== guest uname ====="
+            uname -a || true
+            echo "===== guest block devices ====="
+            lsblk -o NAME,MAJ:MIN,SIZE,TYPE,MOUNTPOINT || true
+            echo "===== guest mounts ====="
+            mount | head -n 50 || true
+            echo "===== root mount source ====="
+            findmnt / || true
+          '
+
+      - name: Copy new plugin .so into QEMU
+        if: ${{ env.SKIP_COMPONENT_BUILD != 'true' }}
+        env:
+          QEMU_SSH_PRIVATE_KEY: ${{ secrets.QEMU_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+
+          if [[ -f "$QEMU_WORKDIR/ssh-target.env" ]]; then
+            # shellcheck disable=SC1090
+            source "$QEMU_WORKDIR/ssh-target.env"
+          fi
+
+          selected_ssh_port="${QEMU_SSH_PORT:-$SSH_HOST_PORT}"
+          selected_ssh_user="${QEMU_SSH_USER:-root}"
+
+          ssh_key_arg=()
+          if [[ -n "${QEMU_SSH_PRIVATE_KEY:-}" ]]; then
+            ssh_key_arg=(-i ~/.ssh/qemu_id_rsa)
+          fi
+
+          for sofile in artifacts/plugins/*.so; do
+            scp "${ssh_key_arg[@]}" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -P "$selected_ssh_port" "$sofile" "$selected_ssh_user@127.0.0.1:$QEMU_GUEST_LIB_DIR/"
+          done
+
+          ssh "${ssh_key_arg[@]}" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$selected_ssh_port" "$selected_ssh_user@127.0.0.1" "sync; systemctl restart WPEFramework || true"
+
+      - name: Upload logs and plugin artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qemu-build-and-logs
+          path: |
+            artifacts/plugins/**
+            /tmp/qemu-artifacts/*.log
+            /tmp/qemu-artifacts/*.pid
+            /tmp/qemu-artifacts/serial.log

@@ -144,8 +144,16 @@ jobs:
             exit 1
           }
 
+          echo "Selected kernel source: $kernel_src"
+          echo "Selected rootfs source: $rootfs_src"
+          ls -lh "$kernel_src" "$rootfs_src"
+
           cp -f "$kernel_src" "$QEMU_WORKDIR/kernel.bin"
           cp -f "$rootfs_src" "$QEMU_WORKDIR/rootfs.ext4"
+
+          echo "Prepared runtime images in $QEMU_WORKDIR"
+          ls -lh "$QEMU_WORKDIR/kernel.bin" "$QEMU_WORKDIR/rootfs.ext4"
+          sha256sum "$QEMU_WORKDIR/kernel.bin" "$QEMU_WORKDIR/rootfs.ext4" || true
 
           run_script_src="$GITHUB_WORKSPACE/Tests/vDeviceTests/qemu-images/$QEMU_RUN_SCRIPT_FILE"
           if [[ -f "$run_script_src" ]]; then
@@ -159,19 +167,25 @@ jobs:
         run: |
           set -euo pipefail
 
+          echo "qemu-system-x86_64 version:"
+          qemu-system-x86_64 --version | head -n 1
+
           # Use KVM if available for fast boot; fall back to TCG (slow ~5-10 min)
+          # TCG uses IvyBridge to match the validated run_qemu.sh CPU model
           if [[ -r /dev/kvm ]]; then
             accel_args="-machine q35,accel=kvm -enable-kvm -cpu host"
             echo "KVM available, using hardware acceleration"
           else
-            accel_args="-machine q35,accel=tcg -cpu max"
-            echo "KVM not available, using software emulation (boot may take 5-10 minutes)"
+            accel_args="-machine q35,accel=tcg -cpu IvyBridge"
+            echo "KVM not available, using software emulation with IvyBridge CPU (boot may take 5-10 minutes)"
           fi
+
+          echo "Launching QEMU with SSH forward host 127.0.0.1:${SSH_HOST_PORT} -> guest:22"
 
           qemu-system-x86_64 \
             $accel_args \
             -kernel "$QEMU_WORKDIR/kernel.bin" \
-            -append "console=ttyS0 root=/dev/vda rw rootwait rootfstype=ext4 init=/sbin/init" \
+            -append "console=ttyS0 earlyprintk=serial,ttyS0 loglevel=7 root=/dev/vda rw rootwait rootdelay=5 rootfstype=ext4 init=/sbin/init" \
             -drive file="$QEMU_WORKDIR/rootfs.ext4",if=virtio,format=raw \
             -smp 4 \
             -m 2048 \
@@ -183,6 +197,12 @@ jobs:
             -pidfile "$QEMU_WORKDIR/qemu.pid"
 
           echo "QEMU started with PID: $(cat $QEMU_WORKDIR/qemu.pid)"
+          if ! kill -0 "$(cat "$QEMU_WORKDIR/qemu.pid")" 2>/dev/null; then
+            echo "QEMU process is not alive immediately after launch" >&2
+            exit 1
+          fi
+          echo "Initial serial output (if any):"
+          tail -n 30 "$QEMU_WORKDIR/serial.log" 2>/dev/null || true
 
       - name: Wait for SSH in guest
         env:
@@ -208,6 +228,10 @@ jobs:
               break
             fi
 
+            if (( attempt == 1 || attempt % 20 == 0 )); then
+              echo "SSH readiness attempt $attempt/240 on port $SSH_HOST_PORT"
+            fi
+
             # Print serial log progress every 30 attempts (~2.5 min)
             if (( attempt % 30 == 0 )); then
               echo "--- boot progress at attempt $attempt ---"
@@ -215,10 +239,12 @@ jobs:
             fi
 
             if nc -z -w2 127.0.0.1 "$SSH_HOST_PORT" 2>/dev/null; then
+              echo "TCP port $SSH_HOST_PORT is open; checking SSH login for candidate users"
               for ssh_user in "${user_candidates[@]}"; do
                 if ssh "${ssh_key_arg[@]}" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -p "$SSH_HOST_PORT" "$ssh_user@127.0.0.1" 'echo SSH_READY' 2>/dev/null; then
                   echo "QEMU_SSH_PORT=$SSH_HOST_PORT" > "$QEMU_WORKDIR/ssh-target.env"
                   echo "QEMU_SSH_USER=$ssh_user" >> "$QEMU_WORKDIR/ssh-target.env"
+                  echo "SSH ready as user: $ssh_user"
                   exit 0
                 fi
               done
@@ -230,6 +256,36 @@ jobs:
           echo "----- last 100 lines of serial.log -----" >&2
           tail -n 100 "$QEMU_WORKDIR/serial.log" >&2 || true
           exit 1
+
+      - name: Inspect guest block devices and mounts
+        env:
+          QEMU_SSH_PRIVATE_KEY: ${{ secrets.QEMU_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+
+          if [[ -f "$QEMU_WORKDIR/ssh-target.env" ]]; then
+            # shellcheck disable=SC1090
+            source "$QEMU_WORKDIR/ssh-target.env"
+          fi
+
+          selected_ssh_port="${QEMU_SSH_PORT:-$SSH_HOST_PORT}"
+          selected_ssh_user="${QEMU_SSH_USER:-root}"
+
+          ssh_key_arg=()
+          if [[ -n "${QEMU_SSH_PRIVATE_KEY:-}" ]]; then
+            ssh_key_arg=(-i ~/.ssh/qemu_id_rsa)
+          fi
+
+          ssh "${ssh_key_arg[@]}" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$selected_ssh_port" "$selected_ssh_user@127.0.0.1" '
+            echo "===== guest uname ====="
+            uname -a || true
+            echo "===== guest block devices ====="
+            lsblk -o NAME,MAJ:MIN,SIZE,TYPE,MOUNTPOINT || true
+            echo "===== guest mounts ====="
+            mount | head -n 50 || true
+            echo "===== root mount source ====="
+            findmnt / || true
+          '
 
       - name: Copy new plugin .so into QEMU
         if: ${{ env.SKIP_COMPONENT_BUILD != 'true' }}

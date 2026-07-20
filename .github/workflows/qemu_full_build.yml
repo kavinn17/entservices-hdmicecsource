@@ -163,6 +163,35 @@ jobs:
 
           ls -lh "$QEMU_WORKDIR/"
 
+      - name: Inspect rootfs and kernel images
+        run: |
+          set -euo pipefail
+          apt-get install -y --no-install-recommends e2fsprogs file binutils 2>/dev/null || true
+
+          echo "===== kernel.bin file type ====="
+          file "$QEMU_WORKDIR/kernel.bin" || true
+
+          echo "===== rootfs.ext4 file type ====="
+          file "$QEMU_WORKDIR/rootfs.ext4" || true
+
+          echo "===== rootfs ext4 superblock info ====="
+          dumpe2fs -h "$QEMU_WORKDIR/rootfs.ext4" 2>&1 | head -40 || true
+
+          echo "===== rootfs filesystem check (read-only) ====="
+          e2fsck -n "$QEMU_WORKDIR/rootfs.ext4" 2>&1 | tail -10 || true
+
+          echo "===== rootfs root directory listing ====="
+          debugfs -R "ls -l /" "$QEMU_WORKDIR/rootfs.ext4" 2>/dev/null || true
+
+          echo "===== rootfs /lib/modules listing (kernel module dirs) ====="
+          debugfs -R "ls -l /lib/modules" "$QEMU_WORKDIR/rootfs.ext4" 2>/dev/null || true
+
+          echo "===== rootfs /etc/os-release ====="
+          debugfs -R "cat /etc/os-release" "$QEMU_WORKDIR/rootfs.ext4" 2>/dev/null || true
+
+          echo "===== rootfs used/free space ====="
+          debugfs -R "stats" "$QEMU_WORKDIR/rootfs.ext4" 2>/dev/null | grep -E 'Block count|Free blocks|Block size|Inode count|Free inodes' || true
+
       - name: Boot QEMU inside CI container
         run: |
           set -euo pipefail

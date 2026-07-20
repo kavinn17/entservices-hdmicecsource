@@ -171,8 +171,8 @@ jobs:
           qemu-system-x86_64 \
             $accel_args \
             -kernel "$QEMU_WORKDIR/kernel.bin" \
-            -append "console=ttyS0 root=/dev/sda rw rootwait rootfstype=ext4 init=/sbin/init" \
-            -drive file="$QEMU_WORKDIR/rootfs.ext4",if=ide,format=raw \
+            -append "console=ttyS0 root=/dev/vda rw rootwait rootfstype=ext4 init=/sbin/init" \
+            -drive file="$QEMU_WORKDIR/rootfs.ext4",if=virtio,format=raw \
             -smp 4 \
             -m 2048 \
             -display none \

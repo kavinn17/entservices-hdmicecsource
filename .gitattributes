@@ -2,3 +2,4 @@
 Tests/vDeviceTests/qemu-images/*.ext4 filter=lfs diff=lfs merge=lfs -text
 Tests/vDeviceTests/qemu-images/*.bin filter=lfs diff=lfs merge=lfs -text
 Tests/vDeviceTests/qemu-images/*.img filter=lfs diff=lfs merge=lfs -text
+Tests/vDeviceTests/qemu-images/*.tar.gz filter=lfs diff=lfs merge=lfs -text

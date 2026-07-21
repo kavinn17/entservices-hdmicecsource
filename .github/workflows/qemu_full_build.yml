@@ -67,7 +67,16 @@ jobs:
             curl \
             jq \
             ca-certificates \
-            netcat-openbsd
+            netcat-openbsd \
+            git-lfs
+
+      - name: Pull Git LFS assets for QEMU images
+        run: |
+          set -euo pipefail
+          git lfs version
+          git lfs install --local
+          git lfs pull --include="Tests/vDeviceTests/qemu-images/*"
+          ls -lh "$GITHUB_WORKSPACE/Tests/vDeviceTests/qemu-images/" || true
 
       - name: Download and prepare kernel/rootfs from GitHub Release
         env:
@@ -120,7 +129,20 @@ jobs:
 
           rm -rf "$extract_dir"
           mkdir -p "$extract_dir"
-          tar -xzf "$image_tar" -C "$extract_dir"
+
+          # Detect accidental Git LFS pointer checkout before extraction.
+          if head -n 1 "$image_tar" | grep -q 'version https://git-lfs.github.com/spec/v1'; then
+            echo "ERROR: $image_tar is a Git LFS pointer, not the real artifact." >&2
+            echo "Ensure git-lfs is installed and LFS objects are pulled in the workflow." >&2
+            exit 1
+          fi
+
+          # Support both gzip-compressed tar and plain tar payloads.
+          if tar -tzf "$image_tar" >/dev/null 2>&1; then
+            tar -xzf "$image_tar" -C "$extract_dir"
+          else
+            tar -xf "$image_tar" -C "$extract_dir"
+          fi
 
           echo "Extracted tar contents:"
           find "$extract_dir" -type f | xargs ls -lh

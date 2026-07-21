@@ -73,6 +73,8 @@ jobs:
       - name: Pull Git LFS assets for QEMU images
         run: |
           set -euo pipefail
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git rev-parse --git-dir
           git lfs version
           git lfs install --local
           git lfs pull --include="Tests/vDeviceTests/qemu-images/*"

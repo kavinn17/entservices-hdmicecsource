@@ -26,9 +26,7 @@ jobs:
       QEMU_SSH_USER: root
       QEMU_GUEST_LIB_DIR: /usr/lib/wpeframework/plugins
       SKIP_COMPONENT_BUILD: 'true'
-      ARTIFACTORY_DEFAULT_IMAGE_URL: https://artifactory.comcast.com/artifactory/vdevice-generic/DefaultImage.tar.gz
-      ARTIFACTORY_USER: ${{ secrets.ARTIFACTORY_USER }}
-      ARTIFACTORY_TOKEN: ${{ secrets.ARTIFACTORY_TOKEN }}
+      GITHUB_IMAGE_ASSET_NAME: DefaultImage.tar.gz
       QEMU_RUN_SCRIPT_FILE: run_qemu.sh
 
     steps:
@@ -67,43 +65,50 @@ jobs:
             qemu-system-x86 \
             openssh-client \
             curl \
+            jq \
             ca-certificates \
             netcat-openbsd
 
-      - name: Download and prepare kernel/rootfs from Artifactory
+      - name: Download and prepare kernel/rootfs from GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           mkdir -p "$QEMU_WORKDIR"
 
           image_tar="$QEMU_WORKDIR/DefaultImage.tar.gz"
           extract_dir="$QEMU_WORKDIR/image"
+          releases_api="https://api.github.com/repos/$GITHUB_REPOSITORY/releases/latest"
 
-          if [[ -z "${ARTIFACTORY_USER:-}" || -z "${ARTIFACTORY_TOKEN:-}" ]]; then
-            echo "ERROR: ARTIFACTORY_USER or ARTIFACTORY_TOKEN secret is not set" >&2
+          if [[ -z "${GH_TOKEN:-}" ]]; then
+            echo "ERROR: github.token is not available for release asset download" >&2
             exit 1
           fi
 
-          echo "Checking Artifactory access..."
-          if ! curl -sS -L -I \
-            --connect-timeout 15 \
-            --max-time 90 \
-            -u "$ARTIFACTORY_USER:$ARTIFACTORY_TOKEN" \
-            -o /dev/null \
-            -w 'HEAD HTTP:%{http_code} CONNECT:%{time_connect}s START:%{time_starttransfer}s TOTAL:%{time_total}s\n' \
-            "$ARTIFACTORY_DEFAULT_IMAGE_URL"; then
-            echo "ERROR: Artifactory is unreachable. Check network access or use a self-hosted runner." >&2
+          echo "Resolving release asset from latest GitHub release..."
+          release_json="$(curl -sS -fL \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "$releases_api")"
+
+          asset_id="$(echo "$release_json" | jq -r --arg name "$GITHUB_IMAGE_ASSET_NAME" '.assets[] | select(.name == $name) | .id' | head -n 1)"
+          if [[ -z "$asset_id" || "$asset_id" == "null" ]]; then
+            echo "ERROR: Asset '$GITHUB_IMAGE_ASSET_NAME' not found in latest release" >&2
+            echo "Available assets in latest release:" >&2
+            echo "$release_json" | jq -r '.assets[]?.name' | sed 's/^/  - /' >&2
             exit 1
           fi
 
-          echo "Downloading QEMU image tarball from Artifactory..."
+          echo "Downloading release asset id $asset_id ($GITHUB_IMAGE_ASSET_NAME)..."
           curl -sS -fL \
             --retry 3 \
             --retry-delay 5 \
             --connect-timeout 15 \
             --max-time 600 \
-            -u "$ARTIFACTORY_USER:$ARTIFACTORY_TOKEN" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/octet-stream" \
             -w 'GET HTTP:%{http_code} SIZE:%{size_download} TOTAL:%{time_total}s\n' \
-            "$ARTIFACTORY_DEFAULT_IMAGE_URL" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" \
             -o "$image_tar"
 
           rm -rf "$extract_dir"

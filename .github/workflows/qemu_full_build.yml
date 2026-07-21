@@ -351,45 +351,24 @@ jobs:
             ssh_key_arg=(-i ~/.ssh/qemu_id_rsa)
           fi
 
+          # WPEFramework is NOT present in this QEMU image.
+          # Only wait for the vComponent port (8080 inside guest -> VCOMPONENT_HOST_PORT on host).
           for attempt in $(seq 1 120); do
             if (( attempt == 1 || attempt % 12 == 0 )); then
-              echo "Guest service readiness attempt $attempt/120"
+              echo "vComponent readiness attempt $attempt/120 (port $VCOMPONENT_HOST_PORT)"
             fi
 
-            if ! nc -z -w2 127.0.0.1 "$VCOMPONENT_HOST_PORT" 2>/dev/null; then
-              sleep 5
-              continue
-            fi
-
-            if ! nc -z -w2 127.0.0.1 "$WPEFRAMEWORK_HOST_PORT" 2>/dev/null; then
-              sleep 5
-              continue
-            fi
-
-            if response="$(curl -sS --max-time 5 \
-              -H "Content-Type: application/json" \
-              -X POST \
-              --data '{"jsonrpc":"2.0","id":1,"method":"Controller.1.status@org.rdk.Controller"}' \
-              "http://127.0.0.1:${WPEFRAMEWORK_HOST_PORT}/jsonrpc" || true)" && echo "$response" | grep -q '"jsonrpc"'; then
-              echo "Guest JSON-RPC and vComponent are reachable"
-              echo "$response"
+            if nc -z -w2 127.0.0.1 "$VCOMPONENT_HOST_PORT" 2>/dev/null; then
+              echo "vComponent port $VCOMPONENT_HOST_PORT is open — proceeding to tests"
               exit 0
             fi
 
             sleep 5
           done
 
-          echo "Timed out waiting for guest JSON-RPC/vComponent readiness" >&2
-          echo "===== host forwarded-port checks =====" >&2
-          nc -zv 127.0.0.1 "$WPEFRAMEWORK_HOST_PORT" || true
+          echo "Timed out waiting for vComponent readiness on port $VCOMPONENT_HOST_PORT" >&2
+          echo "===== host port check =====" >&2
           nc -zv 127.0.0.1 "$VCOMPONENT_HOST_PORT" || true
-          echo "===== host JSON-RPC probe =====" >&2
-          curl -sS --max-time 8 \
-            -H "Content-Type: application/json" \
-            -X POST \
-            --data '{"jsonrpc":"2.0","id":1,"method":"Controller.1.status@org.rdk.Controller"}' \
-            "http://127.0.0.1:${WPEFRAMEWORK_HOST_PORT}/jsonrpc" || true
-
           ssh "${ssh_key_arg[@]}" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$selected_ssh_port" "$selected_ssh_user@127.0.0.1" '
             echo "===== guest listening ports ====="
             if command -v ss >/dev/null 2>&1; then
@@ -397,27 +376,13 @@ jobs:
             elif command -v netstat >/dev/null 2>&1; then
               netstat -ltnp || true
             else
-              echo "Neither ss nor netstat is available"
-            fi
-            echo "===== WPE/Thunder service status ====="
-            if command -v systemctl >/dev/null 2>&1; then
-              systemctl list-units --type=service --all | grep -Ei "wpe|thunder|rfc" || true
-              for unit in WPEFramework.service wpeframework.service Thunder.service thunder.service; do
-                systemctl status "$unit" --no-pager || true
+              cat /proc/net/tcp6 /proc/net/tcp 2>/dev/null | awk "NR>1 {print \$2}" | while read hex; do
+                port=$(printf "%d" 0x${hex##*:})
+                echo "  listening port: $port"
               done
-            else
-              echo "systemctl is not available"
-            fi
-            echo "===== recent WPE/Thunder logs ====="
-            if command -v journalctl >/dev/null 2>&1; then
-              for unit in WPEFramework wpeframework Thunder thunder; do
-                journalctl -u "$unit" --no-pager -n 120 || true
-              done
-            else
-              echo "journalctl is not available"
             fi
             echo "===== vComponent related processes ====="
-            ps -ef | grep -Ei "vcomponent|wpeframework|thunder" | grep -v grep || true
+            ps -ef | grep -Ei "vcomponent|hdmicec" | grep -v grep || true
           ' || true
           exit 1
 

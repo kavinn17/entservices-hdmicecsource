@@ -23,6 +23,8 @@ jobs:
       QEMU_WORKDIR: /tmp/qemu-artifacts
       SSH_HOST_PORT: '5522'
       SSH_HOST_PORT_ALT: '5523'
+      WPEFRAMEWORK_HOST_PORT: '59998'
+      VCOMPONENT_HOST_PORT: '58080'
       QEMU_SSH_USER: root
       QEMU_GUEST_LIB_DIR: /usr/lib/wpeframework/plugins
       SKIP_COMPONENT_BUILD: 'true'
@@ -231,7 +233,7 @@ jobs:
             -m 2048 \
             -display none \
             -serial file:"$QEMU_WORKDIR/serial.log" \
-            -netdev user,id=network0,hostfwd=tcp:127.0.0.1:${SSH_HOST_PORT}-:22 \
+            -netdev user,id=network0,hostfwd=tcp:127.0.0.1:${SSH_HOST_PORT}-:22,hostfwd=tcp:127.0.0.1:${WPEFRAMEWORK_HOST_PORT}-127.0.0.1:9998,hostfwd=tcp:127.0.0.1:${VCOMPONENT_HOST_PORT}-127.0.0.1:8080 \
             -device virtio-net-pci,netdev=network0 \
             -daemonize \
             -pidfile "$QEMU_WORKDIR/qemu.pid"
@@ -329,6 +331,49 @@ jobs:
             echo "===== root mount source ====="
             findmnt / || true
           '
+
+      - name: Wait for WPEFramework and vComponent endpoints
+        run: |
+          set -euo pipefail
+
+          for attempt in $(seq 1 120); do
+            if (( attempt == 1 || attempt % 12 == 0 )); then
+              echo "Endpoint readiness attempt $attempt/120"
+            fi
+
+            if ! nc -z -w2 127.0.0.1 "$WPEFRAMEWORK_HOST_PORT" 2>/dev/null; then
+              sleep 5
+              continue
+            fi
+
+            if ! nc -z -w2 127.0.0.1 "$VCOMPONENT_HOST_PORT" 2>/dev/null; then
+              sleep 5
+              continue
+            fi
+
+            response="$(curl -sS --max-time 5 -H 'Content-Type: application/json' -X POST \
+              --data '{"jsonrpc":"2.0","id":1,"method":"Controller.1.status@org.rdk.HdmiCecSource"}' \
+              "http://127.0.0.1:${WPEFRAMEWORK_HOST_PORT}/jsonrpc" || true)"
+            if echo "$response" | grep -q '"jsonrpc"'; then
+              echo "WPEFramework JSON-RPC ready on port $WPEFRAMEWORK_HOST_PORT"
+              echo "$response"
+              exit 0
+            fi
+
+            sleep 5
+          done
+
+          echo "Timed out waiting for WPEFramework/vComponent endpoints" >&2
+          exit 1
+
+      - name: Run HDMI CEC vDevice tests
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/Tests/vDeviceTests"
+          export TARGET_HOST=127.0.0.1
+          export JSONRPC_PORT="$WPEFRAMEWORK_HOST_PORT"
+          export VCOMPONENT_PORT="$VCOMPONENT_HOST_PORT"
+          python3 SuitManager.py hdmicecsource | tee "$QEMU_WORKDIR/vdevice-tests.log"
 
       - name: Copy new plugin .so into QEMU
         if: ${{ env.SKIP_COMPONENT_BUILD != 'true' }}

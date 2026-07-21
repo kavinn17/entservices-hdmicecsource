@@ -329,33 +329,51 @@ jobs:
             echo "===== guest mounts ====="
             mount | head -n 50 || true
             echo "===== root mount source ====="
-            findmnt / || true
+            cat /proc/mounts | grep " / " || true
           '
 
-      - name: Wait for WPEFramework and vComponent endpoints
+      - name: Wait for guest WPEFramework and vComponent readiness
+        env:
+          QEMU_SSH_PRIVATE_KEY: ${{ secrets.QEMU_SSH_PRIVATE_KEY }}
         run: |
           set -euo pipefail
 
+          if [[ -f "$QEMU_WORKDIR/ssh-target.env" ]]; then
+            # shellcheck disable=SC1090
+            source "$QEMU_WORKDIR/ssh-target.env"
+          fi
+
+          selected_ssh_port="${QEMU_SSH_PORT:-$SSH_HOST_PORT}"
+          selected_ssh_user="${QEMU_SSH_USER:-root}"
+
+          ssh_key_arg=()
+          if [[ -n "${QEMU_SSH_PRIVATE_KEY:-}" ]]; then
+            ssh_key_arg=(-i ~/.ssh/qemu_id_rsa)
+          fi
+
           for attempt in $(seq 1 120); do
             if (( attempt == 1 || attempt % 12 == 0 )); then
-              echo "Endpoint readiness attempt $attempt/120"
+              echo "Guest service readiness attempt $attempt/120"
             fi
 
-            if ! nc -z -w2 127.0.0.1 "$WPEFRAMEWORK_HOST_PORT" 2>/dev/null; then
-              sleep 5
-              continue
-            fi
+            if response="$(ssh "${ssh_key_arg[@]}" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -p "$selected_ssh_port" "$selected_ssh_user@127.0.0.1" '
+              if ! command -v curl >/dev/null 2>&1; then
+                echo CURL_MISSING
+                exit 0
+              fi
 
-            if ! nc -z -w2 127.0.0.1 "$VCOMPONENT_HOST_PORT" 2>/dev/null; then
-              sleep 5
-              continue
-            fi
+              if ! nc -z -w2 127.0.0.1 8080 2>/dev/null; then
+                echo VCOMPONENT_NOT_READY
+                exit 0
+              fi
 
-            response="$(curl -sS --max-time 5 -H 'Content-Type: application/json' -X POST \
-              --data '{"jsonrpc":"2.0","id":1,"method":"Controller.1.status@org.rdk.HdmiCecSource"}' \
-              "http://127.0.0.1:${WPEFRAMEWORK_HOST_PORT}/jsonrpc" || true)"
-            if echo "$response" | grep -q '"jsonrpc"'; then
-              echo "WPEFramework JSON-RPC ready on port $WPEFRAMEWORK_HOST_PORT"
+              curl -sS --max-time 5 \
+                -H "Content-Type: application/json" \
+                -X POST \
+                --data '{"jsonrpc":"2.0","id":1,"method":"Controller.1.status@org.rdk.HdmiCecSource"}' \
+                http://127.0.0.1:9998/jsonrpc || true
+            ')" && echo "$response" | grep -q '"jsonrpc"'; then
+              echo "Guest WPEFramework JSON-RPC and vComponent are ready"
               echo "$response"
               exit 0
             fi
@@ -363,7 +381,17 @@ jobs:
             sleep 5
           done
 
-          echo "Timed out waiting for WPEFramework/vComponent endpoints" >&2
+          echo "Timed out waiting for guest WPEFramework/vComponent readiness" >&2
+          ssh "${ssh_key_arg[@]}" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$selected_ssh_port" "$selected_ssh_user@127.0.0.1" '
+            echo "===== guest listening ports ====="
+            ss -ltnp || true
+            echo "===== WPEFramework service status ====="
+            systemctl status WPEFramework --no-pager || true
+            echo "===== recent WPEFramework logs ====="
+            journalctl -u WPEFramework --no-pager -n 100 || true
+            echo "===== vComponent related processes ====="
+            ps -ef | grep -i vcomponent | grep -v grep || true
+          ' || true
           exit 1
 
       - name: Run HDMI CEC vDevice tests

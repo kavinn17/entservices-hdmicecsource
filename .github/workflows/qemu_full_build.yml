@@ -79,37 +79,44 @@ jobs:
           image_tar="$QEMU_WORKDIR/DefaultImage.tar.gz"
           extract_dir="$QEMU_WORKDIR/image"
           releases_api="https://api.github.com/repos/$GITHUB_REPOSITORY/releases/latest"
+          repo_image_tar="$GITHUB_WORKSPACE/Tests/vDeviceTests/qemu-images/DefaultImage.tar.gz"
 
-          if [[ -z "${GH_TOKEN:-}" ]]; then
-            echo "ERROR: github.token is not available for release asset download" >&2
-            exit 1
+          # Prefer repository-local image tar when present in checkout.
+          if [[ -f "$repo_image_tar" ]]; then
+            echo "Using repository-local image tar: $repo_image_tar"
+            cp -f "$repo_image_tar" "$image_tar"
+          else
+            if [[ -z "${GH_TOKEN:-}" ]]; then
+              echo "ERROR: github.token is not available for release asset download" >&2
+              exit 1
+            fi
+
+            echo "Resolving release asset from latest GitHub release..."
+            release_json="$(curl -sS -fL \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "$releases_api")"
+
+            asset_id="$(echo "$release_json" | jq -r --arg name "$GITHUB_IMAGE_ASSET_NAME" '.assets[] | select(.name == $name) | .id' | head -n 1)"
+            if [[ -z "$asset_id" || "$asset_id" == "null" ]]; then
+              echo "ERROR: Asset '$GITHUB_IMAGE_ASSET_NAME' not found in latest release" >&2
+              echo "Available assets in latest release:" >&2
+              echo "$release_json" | jq -r '.assets[]?.name' | sed 's/^/  - /' >&2
+              exit 1
+            fi
+
+            echo "Downloading release asset id $asset_id ($GITHUB_IMAGE_ASSET_NAME)..."
+            curl -sS -fL \
+              --retry 3 \
+              --retry-delay 5 \
+              --connect-timeout 15 \
+              --max-time 600 \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/octet-stream" \
+              -w 'GET HTTP:%{http_code} SIZE:%{size_download} TOTAL:%{time_total}s\n' \
+              "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" \
+              -o "$image_tar"
           fi
-
-          echo "Resolving release asset from latest GitHub release..."
-          release_json="$(curl -sS -fL \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            "$releases_api")"
-
-          asset_id="$(echo "$release_json" | jq -r --arg name "$GITHUB_IMAGE_ASSET_NAME" '.assets[] | select(.name == $name) | .id' | head -n 1)"
-          if [[ -z "$asset_id" || "$asset_id" == "null" ]]; then
-            echo "ERROR: Asset '$GITHUB_IMAGE_ASSET_NAME' not found in latest release" >&2
-            echo "Available assets in latest release:" >&2
-            echo "$release_json" | jq -r '.assets[]?.name' | sed 's/^/  - /' >&2
-            exit 1
-          fi
-
-          echo "Downloading release asset id $asset_id ($GITHUB_IMAGE_ASSET_NAME)..."
-          curl -sS -fL \
-            --retry 3 \
-            --retry-delay 5 \
-            --connect-timeout 15 \
-            --max-time 600 \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/octet-stream" \
-            -w 'GET HTTP:%{http_code} SIZE:%{size_download} TOTAL:%{time_total}s\n' \
-            "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" \
-            -o "$image_tar"
 
           rm -rf "$extract_dir"
           mkdir -p "$extract_dir"

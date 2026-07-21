@@ -332,7 +332,7 @@ jobs:
             cat /proc/mounts | grep " / " || true
           '
 
-      - name: Wait for guest WPEFramework and vComponent readiness
+      - name: Wait for guest JSON-RPC and vComponent readiness
         env:
           QEMU_SSH_PRIVATE_KEY: ${{ secrets.QEMU_SSH_PRIVATE_KEY }}
         run: |
@@ -356,24 +356,22 @@ jobs:
               echo "Guest service readiness attempt $attempt/120"
             fi
 
-            if response="$(ssh "${ssh_key_arg[@]}" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -p "$selected_ssh_port" "$selected_ssh_user@127.0.0.1" '
-              if ! command -v curl >/dev/null 2>&1; then
-                echo CURL_MISSING
-                exit 0
-              fi
+            if ! nc -z -w2 127.0.0.1 "$VCOMPONENT_HOST_PORT" 2>/dev/null; then
+              sleep 5
+              continue
+            fi
 
-              if ! nc -z -w2 127.0.0.1 8080 2>/dev/null; then
-                echo VCOMPONENT_NOT_READY
-                exit 0
-              fi
+            if ! nc -z -w2 127.0.0.1 "$WPEFRAMEWORK_HOST_PORT" 2>/dev/null; then
+              sleep 5
+              continue
+            fi
 
-              curl -sS --max-time 5 \
-                -H "Content-Type: application/json" \
-                -X POST \
-                --data '{"jsonrpc":"2.0","id":1,"method":"Controller.1.status@org.rdk.HdmiCecSource"}' \
-                http://127.0.0.1:9998/jsonrpc || true
-            ')" && echo "$response" | grep -q '"jsonrpc"'; then
-              echo "Guest WPEFramework JSON-RPC and vComponent are ready"
+            if response="$(curl -sS --max-time 5 \
+              -H "Content-Type: application/json" \
+              -X POST \
+              --data '{"jsonrpc":"2.0","id":1,"method":"Controller.1.status@org.rdk.Controller"}' \
+              "http://127.0.0.1:${WPEFRAMEWORK_HOST_PORT}/jsonrpc" || true)" && echo "$response" | grep -q '"jsonrpc"'; then
+              echo "Guest JSON-RPC and vComponent are reachable"
               echo "$response"
               exit 0
             fi
@@ -381,26 +379,85 @@ jobs:
             sleep 5
           done
 
-          echo "Timed out waiting for guest WPEFramework/vComponent readiness" >&2
+          echo "Timed out waiting for guest JSON-RPC/vComponent readiness" >&2
+          echo "===== host forwarded-port checks =====" >&2
+          nc -zv 127.0.0.1 "$WPEFRAMEWORK_HOST_PORT" || true
+          nc -zv 127.0.0.1 "$VCOMPONENT_HOST_PORT" || true
+          echo "===== host JSON-RPC probe =====" >&2
+          curl -sS --max-time 8 \
+            -H "Content-Type: application/json" \
+            -X POST \
+            --data '{"jsonrpc":"2.0","id":1,"method":"Controller.1.status@org.rdk.Controller"}' \
+            "http://127.0.0.1:${WPEFRAMEWORK_HOST_PORT}/jsonrpc" || true
+
           ssh "${ssh_key_arg[@]}" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$selected_ssh_port" "$selected_ssh_user@127.0.0.1" '
             echo "===== guest listening ports ====="
-            ss -ltnp || true
-            echo "===== WPEFramework service status ====="
-            systemctl status WPEFramework --no-pager || true
-            echo "===== recent WPEFramework logs ====="
-            journalctl -u WPEFramework --no-pager -n 100 || true
+            if command -v ss >/dev/null 2>&1; then
+              ss -ltnp || true
+            elif command -v netstat >/dev/null 2>&1; then
+              netstat -ltnp || true
+            else
+              echo "Neither ss nor netstat is available"
+            fi
+            echo "===== WPE/Thunder service status ====="
+            if command -v systemctl >/dev/null 2>&1; then
+              systemctl list-units --type=service --all | grep -Ei "wpe|thunder|rfc" || true
+              for unit in WPEFramework.service wpeframework.service Thunder.service thunder.service; do
+                systemctl status "$unit" --no-pager || true
+              done
+            else
+              echo "systemctl is not available"
+            fi
+            echo "===== recent WPE/Thunder logs ====="
+            if command -v journalctl >/dev/null 2>&1; then
+              for unit in WPEFramework wpeframework Thunder thunder; do
+                journalctl -u "$unit" --no-pager -n 120 || true
+              done
+            else
+              echo "journalctl is not available"
+            fi
             echo "===== vComponent related processes ====="
-            ps -ef | grep -i vcomponent | grep -v grep || true
+            ps -ef | grep -Ei "vcomponent|wpeframework|thunder" | grep -v grep || true
           ' || true
           exit 1
 
       - name: Run HDMI CEC vDevice tests
         run: |
           set -euo pipefail
-          cd "$GITHUB_WORKSPACE/Tests/vDeviceTests"
+
+          default_tests_dir="$GITHUB_WORKSPACE/Tests/vDeviceTests"
+          tests_dir=""
+
+          # Fallback: fetch tests from repo when they are not present in current checkout.
+          if [[ ! -d "$default_tests_dir" ]]; then
+            echo "Tests/vDeviceTests not found in workspace. Fetching from main branch..."
+            mkdir -p "$GITHUB_WORKSPACE/Tests"
+            git clone --depth 1 --single-branch --branch main \
+              "https://github.com/rdkcentral/entservices-hdmicecsource.git" \
+              "$QEMU_WORKDIR/entservices-hdmicecsource-tests"
+            cp -a "$QEMU_WORKDIR/entservices-hdmicecsource-tests/Tests/vDeviceTests" "$GITHUB_WORKSPACE/Tests/"
+          fi
+
+          if [[ -n "${VDEVICE_TESTS_DIR:-}" && -d "${VDEVICE_TESTS_DIR}" ]]; then
+            tests_dir="$VDEVICE_TESTS_DIR"
+          elif [[ -d "$default_tests_dir" ]]; then
+            tests_dir="$default_tests_dir"
+          fi
+
+          if [[ -z "$tests_dir" ]]; then
+            echo "Unable to locate Tests/vDeviceTests directory" >&2
+            echo "Checked:" >&2
+            echo "  - VDEVICE_TESTS_DIR=${VDEVICE_TESTS_DIR:-<unset>}" >&2
+            echo "  - $default_tests_dir" >&2
+            exit 1
+          fi
+
+          echo "Using vDevice test directory: $tests_dir"
+          cd "$tests_dir"
           export TARGET_HOST=127.0.0.1
           export JSONRPC_PORT="$WPEFRAMEWORK_HOST_PORT"
           export VCOMPONENT_PORT="$VCOMPONENT_HOST_PORT"
+          export AUTO_ACTIVATE_PLUGINS=0
           python3 SuitManager.py hdmicecsource | tee "$QEMU_WORKDIR/vdevice-tests.log"
 
       - name: Copy new plugin .so into QEMU

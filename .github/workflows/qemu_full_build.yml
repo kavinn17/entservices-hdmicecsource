@@ -560,6 +560,87 @@ jobs:
           export HDMICEC_AUTO_COVERAGE=0
           python3 SuitManager.py | tee "$QEMU_WORKDIR/vdevice-tests.log"
 
+      - name: Collect plugin coverage from guest
+        if: always()
+        env:
+          QEMU_SSH_PRIVATE_KEY: ${{ secrets.QEMU_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+
+          if [[ -f "$QEMU_WORKDIR/ssh-target.env" ]]; then
+            # shellcheck disable=SC1090
+            source "$QEMU_WORKDIR/ssh-target.env"
+          fi
+
+          selected_ssh_port="${QEMU_SSH_PORT:-$SSH_HOST_PORT}"
+          selected_ssh_user="${QEMU_SSH_USER:-root}"
+
+          ssh_key_arg=()
+          if [[ -n "${QEMU_SSH_PRIVATE_KEY:-}" ]]; then
+            ssh_key_arg=(-i ~/.ssh/qemu_id_rsa)
+          fi
+
+          mkdir -p "$QEMU_WORKDIR/coverage"
+
+          # Generate coverage inside guest where gcda/gcno data exists.
+          scp "${ssh_key_arg[@]}" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -P "$selected_ssh_port" \
+            "$GITHUB_WORKSPACE/Tests/vDeviceTests/hdmicecsource-gcov-report.sh" \
+            "$selected_ssh_user@127.0.0.1:/tmp/hdmicecsource-gcov-report.sh"
+
+          ssh "${ssh_key_arg[@]}" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$selected_ssh_port" "$selected_ssh_user@127.0.0.1" '
+            set -e
+            chmod +x /tmp/hdmicecsource-gcov-report.sh
+            /tmp/hdmicecsource-gcov-report.sh /tmp/hdmicecsource-coverage
+            ls -lh /tmp/hdmicecsource-coverage/
+          '
+
+          # Pull plugin-only outputs to host workspace artifacts.
+          scp "${ssh_key_arg[@]}" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -P "$selected_ssh_port" \
+            "$selected_ssh_user@127.0.0.1:/tmp/hdmicecsource-coverage/plugin.info" \
+            "$QEMU_WORKDIR/coverage/plugin.info"
+
+          # Optional files when available.
+          scp "${ssh_key_arg[@]}" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -P "$selected_ssh_port" \
+            "$selected_ssh_user@127.0.0.1:/tmp/hdmicecsource-coverage/coverage.xml" \
+            "$QEMU_WORKDIR/coverage/coverage.xml" || true
+
+          if command -v lcov >/dev/null 2>&1; then
+            lcov --summary "$QEMU_WORKDIR/coverage/plugin.info" > "$QEMU_WORKDIR/coverage/plugin-summary.txt" || true
+          fi
+
+      - name: Upload plugin coverage to Artifactory
+        if: always()
+        env:
+          ARTIFACTORY_USER: ${{ secrets.ARTIFACTORY_USER }}
+          ARTIFACTORY_TOKEN: ${{ secrets.ARTIFACTORY_TOKEN }}
+          ARTIFACTORY_COVERAGE_BASE_URL: ${{ secrets.ARTIFACTORY_COVERAGE_BASE_URL }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${ARTIFACTORY_USER:-}" || -z "${ARTIFACTORY_TOKEN:-}" || -z "${ARTIFACTORY_COVERAGE_BASE_URL:-}" ]]; then
+            echo "Missing Artifactory coverage upload configuration. Required secrets: ARTIFACTORY_USER, ARTIFACTORY_TOKEN, ARTIFACTORY_COVERAGE_BASE_URL" >&2
+            exit 1
+          fi
+
+          cov_dir="$QEMU_WORKDIR/coverage"
+          if [[ ! -f "$cov_dir/plugin.info" ]]; then
+            echo "Coverage file missing: $cov_dir/plugin.info" >&2
+            exit 1
+          fi
+
+          target_base="${ARTIFACTORY_COVERAGE_BASE_URL%/}/entservices-hdmicecsource/${GITHUB_REF_NAME}/${GITHUB_RUN_ID}"
+          echo "Uploading plugin coverage to: $target_base"
+
+          curl -sS -fL -u "$ARTIFACTORY_USER:$ARTIFACTORY_TOKEN" -T "$cov_dir/plugin.info" "$target_base/plugin.info"
+
+          if [[ -f "$cov_dir/plugin-summary.txt" ]]; then
+            curl -sS -fL -u "$ARTIFACTORY_USER:$ARTIFACTORY_TOKEN" -T "$cov_dir/plugin-summary.txt" "$target_base/plugin-summary.txt"
+          fi
+
+          if [[ -f "$cov_dir/coverage.xml" ]]; then
+            curl -sS -fL -u "$ARTIFACTORY_USER:$ARTIFACTORY_TOKEN" -T "$cov_dir/coverage.xml" "$target_base/coverage.xml"
+          fi
+
       - name: Collect guest WPEFramework diagnostics
         if: always()
         env:
@@ -633,6 +714,7 @@ jobs:
           name: qemu-build-and-logs
           path: |
             artifacts/plugins/**
+            /tmp/qemu-artifacts/coverage/**
             /tmp/qemu-artifacts/*.log
             /tmp/qemu-artifacts/*.pid
             /tmp/qemu-artifacts/serial.log

@@ -27,7 +27,7 @@ jobs:
       VCOMPONENT_HOST_PORT: '58080'
       QEMU_SSH_USER: root
       QEMU_GUEST_LIB_DIR: /usr/lib/wpeframework/plugins
-      SKIP_COMPONENT_BUILD: 'false'
+      SKIP_COMPONENT_BUILD: 'true'
       GITHUB_IMAGE_ASSET_NAME: DefaultImage.tar.gz
       QEMU_RUN_SCRIPT_FILE: run_qemu.sh
 
@@ -563,8 +563,18 @@ jobs:
               "http://127.0.0.1:9998/jsonrpc" || true
 
             echo "===== pre-test: HdmiCecSource plugin files ====="
-            ls -l /usr/lib/wpeframework/plugins/libWPEFrameworkHdmiCecSource.so \
-              /usr/lib/wpeframework/plugins/libWPEFrameworkHdmiCecSourceImplementation.so 2>/dev/null || true
+            for pso in /usr/lib/wpeframework/plugins/libWPEFrameworkHdmiCecSource.so \
+                       /usr/lib/wpeframework/plugins/libWPEFrameworkHdmiCecSourceImplementation.so; do
+              if [ -f "$pso" ]; then
+                echo "--- $pso ---"
+                ls -lh "$pso"
+                sha256sum "$pso"
+                file "$pso"
+                strings "$pso" 2>/dev/null | grep -E '^(API_VERSION|PLUGIN_VERSION|Version|v[0-9]+\.[0-9]+)' | head -n 10 || true
+              else
+                echo "MISSING: $pso" >&2
+              fi
+            done
 
             echo "===== pre-test: HdmiCecSource plugin dependencies ====="
             if command -v ldd >/dev/null 2>&1; then

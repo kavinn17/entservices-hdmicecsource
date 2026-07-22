@@ -397,11 +397,31 @@ jobs:
           status_payload='{"jsonrpc":"2.0","id":1,"method":"Controller.1.status@org.rdk.HdmiCecSource"}'
 
           # Some QEMU images do not expose WPEFramework JSON-RPC (host port 59998).
-          # Probe first and skip activation if endpoint never becomes reachable.
+          # Fast TCP probe first to avoid waiting a full JSON-RPC timeout window.
+          tcp_open=0
+          for attempt in $(seq 1 6); do
+            if (( attempt == 1 || attempt == 6 )); then
+              echo "JSON-RPC TCP probe attempt ${attempt}/6"
+            fi
+
+            if nc -z -w2 127.0.0.1 "$WPEFRAMEWORK_HOST_PORT" 2>/dev/null; then
+              tcp_open=1
+              break
+            fi
+
+            sleep 2
+          done
+
+          if (( tcp_open == 0 )); then
+            echo "JSON-RPC TCP port ${WPEFRAMEWORK_HOST_PORT} is not open; skipping HdmiCecSource activation"
+            exit 0
+          fi
+
+          # JSON-RPC probe after TCP becomes reachable.
           endpoint_ready=0
-          for attempt in $(seq 1 24); do
-            if (( attempt == 1 || attempt % 6 == 0 )); then
-              echo "JSON-RPC readiness attempt ${attempt}/24"
+          for attempt in $(seq 1 12); do
+            if (( attempt == 1 || attempt % 4 == 0 )); then
+              echo "JSON-RPC readiness attempt ${attempt}/12"
             fi
 
             if curl -sS \
@@ -414,7 +434,7 @@ jobs:
               break
             fi
 
-            sleep 5
+            sleep 3
           done
 
           if (( endpoint_ready == 0 )); then

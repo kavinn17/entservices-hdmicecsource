@@ -351,6 +351,7 @@ jobs:
             ssh_key_arg=(-i ~/.ssh/qemu_id_rsa)
           fi
 
+          jsonrpc_url="http://127.0.0.1:${WPEFRAMEWORK_HOST_PORT}/jsonrpc"
           jsonrpc_ready=0
           vcomponent_ready=0
 
@@ -359,8 +360,13 @@ jobs:
               echo "Service readiness attempt $attempt/120 (JSON-RPC:$WPEFRAMEWORK_HOST_PORT vComponent:$VCOMPONENT_HOST_PORT)"
             fi
 
-            if (( jsonrpc_ready == 0 )) && nc -z -w2 127.0.0.1 "$WPEFRAMEWORK_HOST_PORT" 2>/dev/null; then
-              echo "WPEFramework JSON-RPC port $WPEFRAMEWORK_HOST_PORT is open"
+            if (( jsonrpc_ready == 0 )) && curl -sS \
+              --connect-timeout 2 \
+              --max-time 6 \
+              -H 'Content-Type: application/json' \
+              --data '{"jsonrpc":"2.0","id":1,"method":"Controller.1.status"}' \
+              "$jsonrpc_url" >/dev/null 2>&1; then
+              echo "WPEFramework JSON-RPC endpoint is ready on port $WPEFRAMEWORK_HOST_PORT"
               jsonrpc_ready=1
             fi
 
@@ -381,6 +387,12 @@ jobs:
           echo "===== host port check =====" >&2
           nc -zv 127.0.0.1 "$WPEFRAMEWORK_HOST_PORT" || true
           nc -zv 127.0.0.1 "$VCOMPONENT_HOST_PORT" || true
+          curl -sS \
+            --connect-timeout 2 \
+            --max-time 6 \
+            -H 'Content-Type: application/json' \
+            --data '{"jsonrpc":"2.0","id":1,"method":"Controller.1.status"}' \
+            "$jsonrpc_url" || true
           ssh "${ssh_key_arg[@]}" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$selected_ssh_port" "$selected_ssh_user@127.0.0.1" '
             echo "===== guest listening ports ====="
             if command -v ss >/dev/null 2>&1; then
@@ -437,6 +449,46 @@ jobs:
           export JSONRPC_PORT="$WPEFRAMEWORK_HOST_PORT"
           export VCOMPONENT_PORT="$VCOMPONENT_HOST_PORT"
           python3 SuitManager.py | tee "$QEMU_WORKDIR/vdevice-tests.log"
+
+      - name: Collect guest WPEFramework diagnostics
+        if: always()
+        env:
+          QEMU_SSH_PRIVATE_KEY: ${{ secrets.QEMU_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+
+          if [[ -f "$QEMU_WORKDIR/ssh-target.env" ]]; then
+            # shellcheck disable=SC1090
+            source "$QEMU_WORKDIR/ssh-target.env"
+          fi
+
+          selected_ssh_port="${QEMU_SSH_PORT:-$SSH_HOST_PORT}"
+          selected_ssh_user="${QEMU_SSH_USER:-root}"
+
+          ssh_key_arg=()
+          if [[ -n "${QEMU_SSH_PRIVATE_KEY:-}" ]]; then
+            ssh_key_arg=(-i ~/.ssh/qemu_id_rsa)
+          fi
+
+          ssh "${ssh_key_arg[@]}" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$selected_ssh_port" "$selected_ssh_user@127.0.0.1" '
+            echo "===== ps ====="
+            ps -ef | grep -Ei "wpeframework|thunder|hdmicec" | grep -v grep || true
+            echo "===== listening ports ====="
+            if command -v ss >/dev/null 2>&1; then
+              ss -ltnp || true
+            elif command -v netstat >/dev/null 2>&1; then
+              netstat -ltnp || true
+            fi
+            echo "===== journalctl WPEFramework ====="
+            journalctl -u WPEFramework -u wpeframework -n 200 --no-pager 2>/dev/null || true
+            echo "===== systemctl status ====="
+            systemctl status WPEFramework wpeframework 2>/dev/null || true
+            echo "===== log files ====="
+            find /opt/logs /var/log -maxdepth 2 -type f \( -iname "*wpe*" -o -iname "*thunder*" -o -iname "*hdmi*" \) 2>/dev/null | while read logfile; do
+              echo "--- $logfile ---"
+              tail -n 120 "$logfile" 2>/dev/null || true
+            done
+          ' > "$QEMU_WORKDIR/guest-wpeframework-diagnostics.log" 2>&1 || true
 
       - name: Copy new plugin .so into QEMU
         if: ${{ env.SKIP_COMPONENT_BUILD != 'true' }}

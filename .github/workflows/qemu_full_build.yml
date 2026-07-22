@@ -386,6 +386,46 @@ jobs:
           ' || true
           exit 1
 
+      - name: Activate HdmiCecSource plugin and wait
+        run: |
+          set -euo pipefail
+
+          jsonrpc_url="http://127.0.0.1:${WPEFRAMEWORK_HOST_PORT}/jsonrpc"
+          echo "Activating org.rdk.HdmiCecSource via ${jsonrpc_url}"
+
+          activate_payload='{"jsonrpc":"2.0","id":1,"method":"Controller.1.activate","params":{"callsign":"org.rdk.HdmiCecSource"}}'
+          status_payload='{"jsonrpc":"2.0","id":1,"method":"Controller.1.status@org.rdk.HdmiCecSource"}'
+
+          # Retry activation because service/plugin registration can lag behind port readiness.
+          for attempt in $(seq 1 12); do
+            echo "Activation attempt ${attempt}/12"
+            curl -sS -fL \
+              -H 'Content-Type: application/json' \
+              --data "$activate_payload" \
+              "$jsonrpc_url" || true
+            echo
+
+            status_resp="$(curl -sS -fL \
+              -H 'Content-Type: application/json' \
+              --data "$status_payload" \
+              "$jsonrpc_url" || true)"
+
+            if echo "$status_resp" | grep -Eq '"state"\s*:\s*"activated"|"activated"\s*:\s*true'; then
+              echo "org.rdk.HdmiCecSource is activated"
+              echo "Waiting 20 seconds after activation for stabilization"
+              sleep 20
+              exit 0
+            fi
+
+            if (( attempt < 12 )); then
+              sleep 5
+            fi
+          done
+
+          echo "Failed to activate org.rdk.HdmiCecSource after retries" >&2
+          echo "Last plugin status response: ${status_resp:-<empty>}" >&2
+          exit 1
+
       - name: Run HDMI CEC vDevice tests
         run: |
           set -euo pipefail

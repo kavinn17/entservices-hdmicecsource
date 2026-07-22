@@ -422,7 +422,7 @@ jobs:
           export TARGET_HOST=127.0.0.1
           export JSONRPC_PORT="$WPEFRAMEWORK_HOST_PORT"
           export VCOMPONENT_PORT="$VCOMPONENT_HOST_PORT"
-          python3 SuitManager.py hdmicecsource | tee "$QEMU_WORKDIR/vdevice-tests.log"
+          python3 SuitManager.py | tee "$QEMU_WORKDIR/vdevice-tests.log"
 
       - name: Copy new plugin .so into QEMU
         if: ${{ env.SKIP_COMPONENT_BUILD != 'true' }}

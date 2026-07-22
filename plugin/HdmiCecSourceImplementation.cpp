@@ -534,7 +534,11 @@ namespace WPEFramework
             }
             _adminLock.Unlock();
             for (auto* n : notifyList) {
-                n->OnDeviceAdded(logicalAddress);
+                try {
+                    n->OnDeviceAdded(logicalAddress);
+                } catch (...) {
+                    LOGERR("Exception in OnDeviceAdded notification");
+                }
                 n->Release();
             }
 		}
@@ -567,7 +571,11 @@ namespace WPEFramework
             }
             _adminLock.Unlock();
             for (auto* n : notifyList) {
-                n->OnDeviceRemoved(logicalAddress);
+                try {
+                    n->OnDeviceRemoved(logicalAddress);
+                } catch (...) {
+                    LOGERR("Exception in OnDeviceRemoved notification");
+                }
                 n->Release();
             }
 

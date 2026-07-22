@@ -525,8 +525,13 @@ namespace WPEFramework
 			LOGINFO("New cec logical address add notification send:  \r\n");
             std::list<Exchange::IHdmiCecSource::INotification*> notifyList;
             _adminLock.Lock();
-            notifyList = _hdmiCecSourceNotifications;
-            for (auto* n : notifyList) { n->AddRef(); }
+            try {
+                notifyList = _hdmiCecSourceNotifications;
+                for (auto* n : notifyList) { n->AddRef(); }
+            } catch (...) {
+                _adminLock.Unlock();
+                throw;
+            }
             _adminLock.Unlock();
             for (auto* n : notifyList) {
                 n->OnDeviceAdded(logicalAddress);
@@ -553,8 +558,13 @@ namespace WPEFramework
             LOGINFO("Cec logical address remove notification send:  \r\n");
             std::list<Exchange::IHdmiCecSource::INotification*> notifyList;
             _adminLock.Lock();
-            notifyList = _hdmiCecSourceNotifications;
-            for (auto* n : notifyList) { n->AddRef(); }
+            try {
+                notifyList = _hdmiCecSourceNotifications;
+                for (auto* n : notifyList) { n->AddRef(); }
+            } catch (...) {
+                _adminLock.Unlock();
+                throw;
+            }
             _adminLock.Unlock();
             for (auto* n : notifyList) {
                 n->OnDeviceRemoved(logicalAddress);

@@ -396,6 +396,8 @@ jobs:
           exit 1
 
       - name: Run HDMI CEC vDevice tests
+        env:
+          QEMU_SSH_PRIVATE_KEY: ${{ secrets.QEMU_SSH_PRIVATE_KEY }}
         run: |
           set -euo pipefail
 
@@ -428,29 +430,45 @@ jobs:
 
           echo "Using vDevice test directory: $tests_dir"
           cd "$tests_dir"
-          export TARGET_HOST=127.0.0.1
-          export JSONRPC_PORT="$WPEFRAMEWORK_HOST_PORT"
-          export VCOMPONENT_PORT="$VCOMPONENT_HOST_PORT"
-          
-          # Probe both known Thunder endpoint styles and use the first one that responds.
-          jsonrpc_payload='{"jsonrpc":"2.0","id":1,"method":"Controller.1.status"}'
-          for candidate in \
-            "http://127.0.0.1:${WPEFRAMEWORK_HOST_PORT}/jsonrpc" \
-            "http://127.0.0.1:${WPEFRAMEWORK_HOST_PORT}/Service"; do
-            if curl -sS \
-              --connect-timeout 2 \
-              --max-time 6 \
-              -H 'Content-Type: application/json' \
-              --data "$jsonrpc_payload" \
-              "$candidate" >/dev/null 2>&1; then
-              export WPEFRAMEWORK_JSONRPC_URL="$candidate"
-              echo "Using WPEFramework endpoint: $WPEFRAMEWORK_JSONRPC_URL"
-              break
-            fi
-          done
 
-          # Fallback to Thunder accessor path observed in guest logs when probe did not succeed.
-          export WPEFRAMEWORK_JSONRPC_URL="${WPEFRAMEWORK_JSONRPC_URL:-http://127.0.0.1:${WPEFRAMEWORK_HOST_PORT}/Service}"
+          if [[ -f "$QEMU_WORKDIR/ssh-target.env" ]]; then
+            # shellcheck disable=SC1090
+            source "$QEMU_WORKDIR/ssh-target.env"
+          fi
+
+          selected_ssh_port="${QEMU_SSH_PORT:-$SSH_HOST_PORT}"
+          selected_ssh_user="${QEMU_SSH_USER:-root}"
+
+          ssh_key_arg=()
+          if [[ -n "${QEMU_SSH_PRIVATE_KEY:-}" ]]; then
+            ssh_key_arg=(-i ~/.ssh/qemu_id_rsa)
+          fi
+
+          # Tunnel guest localhost endpoints to local high ports so test traffic is not dependent on QEMU hostfwd behavior.
+          JSONRPC_TUNNEL_PORT=59999
+          VCOMPONENT_TUNNEL_PORT=58081
+          ssh "${ssh_key_arg[@]}" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o ExitOnForwardFailure=yes -fN \
+            -L "127.0.0.1:${JSONRPC_TUNNEL_PORT}:127.0.0.1:9998" \
+            -L "127.0.0.1:${VCOMPONENT_TUNNEL_PORT}:127.0.0.1:8080" \
+            -p "$selected_ssh_port" "$selected_ssh_user@127.0.0.1"
+
+          # Ensure tunnel process is cleaned up even if tests fail.
+          tunnel_pid="$(pgrep -f "127.0.0.1:${JSONRPC_TUNNEL_PORT}:127.0.0.1:9998" | head -n 1 || true)"
+          cleanup_tunnel() {
+            if [[ -n "${tunnel_pid:-}" ]]; then
+              kill "$tunnel_pid" 2>/dev/null || true
+            fi
+          }
+          trap cleanup_tunnel EXIT
+
+          nc -z -w3 127.0.0.1 "$JSONRPC_TUNNEL_PORT"
+          nc -z -w3 127.0.0.1 "$VCOMPONENT_TUNNEL_PORT"
+
+          export TARGET_HOST=127.0.0.1
+          export JSONRPC_PORT="$JSONRPC_TUNNEL_PORT"
+          export VCOMPONENT_PORT="$VCOMPONENT_TUNNEL_PORT"
+          export WPEFRAMEWORK_JSONRPC_URL="http://127.0.0.1:${JSONRPC_TUNNEL_PORT}/Service"
           echo "Final WPEFramework endpoint: $WPEFRAMEWORK_JSONRPC_URL"
           export HDMICEC_AUTO_COVERAGE=0
           python3 SuitManager.py | tee "$QEMU_WORKDIR/vdevice-tests.log"

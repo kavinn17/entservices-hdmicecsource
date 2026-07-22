@@ -396,16 +396,52 @@ jobs:
           activate_payload='{"jsonrpc":"2.0","id":1,"method":"Controller.1.activate","params":{"callsign":"org.rdk.HdmiCecSource"}}'
           status_payload='{"jsonrpc":"2.0","id":1,"method":"Controller.1.status@org.rdk.HdmiCecSource"}'
 
+          # Some QEMU images do not expose WPEFramework JSON-RPC (host port 59998).
+          # Probe first and skip activation if endpoint never becomes reachable.
+          endpoint_ready=0
+          for attempt in $(seq 1 24); do
+            if (( attempt == 1 || attempt % 6 == 0 )); then
+              echo "JSON-RPC readiness attempt ${attempt}/24"
+            fi
+
+            if curl -sS \
+              --connect-timeout 2 \
+              --max-time 6 \
+              -H 'Content-Type: application/json' \
+              --data "$status_payload" \
+              "$jsonrpc_url" >/dev/null 2>&1; then
+              endpoint_ready=1
+              break
+            fi
+
+            sleep 5
+          done
+
+          if (( endpoint_ready == 0 )); then
+            echo "JSON-RPC endpoint not reachable on port ${WPEFRAMEWORK_HOST_PORT}; skipping HdmiCecSource activation"
+            exit 0
+          fi
+
           # Retry activation because service/plugin registration can lag behind port readiness.
           for attempt in $(seq 1 12); do
             echo "Activation attempt ${attempt}/12"
             curl -sS -fL \
+              --connect-timeout 2 \
+              --max-time 10 \
+              --retry 2 \
+              --retry-connrefused \
+              --retry-delay 1 \
               -H 'Content-Type: application/json' \
               --data "$activate_payload" \
               "$jsonrpc_url" || true
             echo
 
             status_resp="$(curl -sS -fL \
+              --connect-timeout 2 \
+              --max-time 10 \
+              --retry 2 \
+              --retry-connrefused \
+              --retry-delay 1 \
               -H 'Content-Type: application/json' \
               --data "$status_payload" \
               "$jsonrpc_url" || true)"

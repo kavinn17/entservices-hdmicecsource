@@ -351,23 +351,35 @@ jobs:
             ssh_key_arg=(-i ~/.ssh/qemu_id_rsa)
           fi
 
-          # WPEFramework is NOT present in this QEMU image.
-          # Only wait for the vComponent port (8080 inside guest -> VCOMPONENT_HOST_PORT on host).
+          jsonrpc_ready=0
+          vcomponent_ready=0
+
           for attempt in $(seq 1 120); do
             if (( attempt == 1 || attempt % 12 == 0 )); then
-              echo "vComponent readiness attempt $attempt/120 (port $VCOMPONENT_HOST_PORT)"
+              echo "Service readiness attempt $attempt/120 (JSON-RPC:$WPEFRAMEWORK_HOST_PORT vComponent:$VCOMPONENT_HOST_PORT)"
             fi
 
-            if nc -z -w2 127.0.0.1 "$VCOMPONENT_HOST_PORT" 2>/dev/null; then
-              echo "vComponent port $VCOMPONENT_HOST_PORT is open — proceeding to tests"
+            if (( jsonrpc_ready == 0 )) && nc -z -w2 127.0.0.1 "$WPEFRAMEWORK_HOST_PORT" 2>/dev/null; then
+              echo "WPEFramework JSON-RPC port $WPEFRAMEWORK_HOST_PORT is open"
+              jsonrpc_ready=1
+            fi
+
+            if (( vcomponent_ready == 0 )) && nc -z -w2 127.0.0.1 "$VCOMPONENT_HOST_PORT" 2>/dev/null; then
+              echo "vComponent port $VCOMPONENT_HOST_PORT is open"
+              vcomponent_ready=1
+            fi
+
+            if (( jsonrpc_ready == 1 && vcomponent_ready == 1 )); then
+              echo "JSON-RPC and vComponent ports are ready — proceeding to tests"
               exit 0
             fi
 
             sleep 5
           done
 
-          echo "Timed out waiting for vComponent readiness on port $VCOMPONENT_HOST_PORT" >&2
+          echo "Timed out waiting for service readiness" >&2
           echo "===== host port check =====" >&2
+          nc -zv 127.0.0.1 "$WPEFRAMEWORK_HOST_PORT" || true
           nc -zv 127.0.0.1 "$VCOMPONENT_HOST_PORT" || true
           ssh "${ssh_key_arg[@]}" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$selected_ssh_port" "$selected_ssh_user@127.0.0.1" '
             echo "===== guest listening ports ====="
@@ -381,6 +393,8 @@ jobs:
                 echo "  listening port: $port"
               done
             fi
+            echo "===== WPEFramework related processes ====="
+            ps -ef | grep -Ei "wpeframework|wpe|thunder" | grep -v grep || true
             echo "===== vComponent related processes ====="
             ps -ef | grep -Ei "vcomponent|hdmicec" | grep -v grep || true
           ' || true

@@ -386,102 +386,6 @@ jobs:
           ' || true
           exit 1
 
-      - name: Activate HdmiCecSource plugin and wait
-        run: |
-          set -euo pipefail
-
-          jsonrpc_url="http://127.0.0.1:${WPEFRAMEWORK_HOST_PORT}/jsonrpc"
-          echo "Activating org.rdk.HdmiCecSource via ${jsonrpc_url}"
-
-          activate_payload='{"jsonrpc":"2.0","id":1,"method":"Controller.1.activate","params":{"callsign":"org.rdk.HdmiCecSource"}}'
-          status_payload='{"jsonrpc":"2.0","id":1,"method":"Controller.1.status@org.rdk.HdmiCecSource"}'
-
-          # Some QEMU images do not expose WPEFramework JSON-RPC (host port 59998).
-          # Fast TCP probe first to avoid waiting a full JSON-RPC timeout window.
-          tcp_open=0
-          for attempt in $(seq 1 6); do
-            if (( attempt == 1 || attempt == 6 )); then
-              echo "JSON-RPC TCP probe attempt ${attempt}/6"
-            fi
-
-            if nc -z -w2 127.0.0.1 "$WPEFRAMEWORK_HOST_PORT" 2>/dev/null; then
-              tcp_open=1
-              break
-            fi
-
-            sleep 2
-          done
-
-          if (( tcp_open == 0 )); then
-            echo "JSON-RPC TCP port ${WPEFRAMEWORK_HOST_PORT} is not open; skipping HdmiCecSource activation"
-            exit 0
-          fi
-
-          # JSON-RPC probe after TCP becomes reachable.
-          endpoint_ready=0
-          for attempt in $(seq 1 12); do
-            if (( attempt == 1 || attempt % 4 == 0 )); then
-              echo "JSON-RPC readiness attempt ${attempt}/12"
-            fi
-
-            if curl -sS \
-              --connect-timeout 2 \
-              --max-time 6 \
-              -H 'Content-Type: application/json' \
-              --data "$status_payload" \
-              "$jsonrpc_url" >/dev/null 2>&1; then
-              endpoint_ready=1
-              break
-            fi
-
-            sleep 3
-          done
-
-          if (( endpoint_ready == 0 )); then
-            echo "JSON-RPC endpoint not reachable on port ${WPEFRAMEWORK_HOST_PORT}; skipping HdmiCecSource activation"
-            exit 0
-          fi
-
-          # Retry activation because service/plugin registration can lag behind port readiness.
-          for attempt in $(seq 1 12); do
-            echo "Activation attempt ${attempt}/12"
-            curl -sS -fL \
-              --connect-timeout 2 \
-              --max-time 10 \
-              --retry 2 \
-              --retry-connrefused \
-              --retry-delay 1 \
-              -H 'Content-Type: application/json' \
-              --data "$activate_payload" \
-              "$jsonrpc_url" || true
-            echo
-
-            status_resp="$(curl -sS -fL \
-              --connect-timeout 2 \
-              --max-time 10 \
-              --retry 2 \
-              --retry-connrefused \
-              --retry-delay 1 \
-              -H 'Content-Type: application/json' \
-              --data "$status_payload" \
-              "$jsonrpc_url" || true)"
-
-            if echo "$status_resp" | grep -Eq '"state"\s*:\s*"activated"|"activated"\s*:\s*true'; then
-              echo "org.rdk.HdmiCecSource is activated"
-              echo "Waiting 20 seconds after activation for stabilization"
-              sleep 20
-              exit 0
-            fi
-
-            if (( attempt < 12 )); then
-              sleep 5
-            fi
-          done
-
-          echo "Failed to activate org.rdk.HdmiCecSource after retries" >&2
-          echo "Last plugin status response: ${status_resp:-<empty>}" >&2
-          exit 1
-
       - name: Run HDMI CEC vDevice tests
         run: |
           set -euo pipefail
@@ -518,7 +422,6 @@ jobs:
           export TARGET_HOST=127.0.0.1
           export JSONRPC_PORT="$WPEFRAMEWORK_HOST_PORT"
           export VCOMPONENT_PORT="$VCOMPONENT_HOST_PORT"
-          export AUTO_ACTIVATE_PLUGINS=0
           python3 SuitManager.py hdmicecsource | tee "$QEMU_WORKDIR/vdevice-tests.log"
 
       - name: Copy new plugin .so into QEMU

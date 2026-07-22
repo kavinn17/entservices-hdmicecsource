@@ -5,16 +5,6 @@ permissions:
 
 on:
   workflow_dispatch:
-    inputs:
-      prebuilt_plugin_bundle_url:
-        description: "Optional URL to a tar/zip bundle containing HdmiCecSource plugin .so files"
-        required: false
-        type: string
-      prebuilt_plugin_dir:
-        description: "Optional workspace-relative directory containing prebuilt plugin .so files"
-        required: false
-        default: "artifacts/plugins"
-        type: string
   push:
     branches: [ main, qemu, 'sprint/**', 'release/**', develop, 'test/**' ]
   pull_request:
@@ -37,7 +27,7 @@ jobs:
       VCOMPONENT_HOST_PORT: '58080'
       QEMU_SSH_USER: root
       QEMU_GUEST_LIB_DIR: /usr/lib/wpeframework/plugins
-      SKIP_COMPONENT_BUILD: 'true'
+      SKIP_COMPONENT_BUILD: 'false'
       GITHUB_IMAGE_ASSET_NAME: DefaultImage.tar.gz
       QEMU_RUN_SCRIPT_FILE: run_qemu.sh
 
@@ -68,48 +58,6 @@ jobs:
             echo "No plugin .so files found under install path" >&2
             exit 1
           }
-
-      - name: Prepare prebuilt plugin artifacts
-        if: ${{ env.SKIP_COMPONENT_BUILD == 'true' }}
-        run: |
-          set -euo pipefail
-
-          mkdir -p artifacts/plugins
-
-          bundle_url="${{ github.event.inputs.prebuilt_plugin_bundle_url || '' }}"
-          input_dir="${{ github.event.inputs.prebuilt_plugin_dir || 'artifacts/plugins' }}"
-
-          if [[ -n "$bundle_url" ]]; then
-            echo "Downloading prebuilt plugin bundle: $bundle_url"
-            curl -sS -fL "$bundle_url" -o "$QEMU_WORKDIR/prebuilt-plugins.bundle"
-
-            mkdir -p "$QEMU_WORKDIR/prebuilt-plugins"
-            if tar -tzf "$QEMU_WORKDIR/prebuilt-plugins.bundle" >/dev/null 2>&1; then
-              tar -xzf "$QEMU_WORKDIR/prebuilt-plugins.bundle" -C "$QEMU_WORKDIR/prebuilt-plugins"
-            elif tar -tf "$QEMU_WORKDIR/prebuilt-plugins.bundle" >/dev/null 2>&1; then
-              tar -xf "$QEMU_WORKDIR/prebuilt-plugins.bundle" -C "$QEMU_WORKDIR/prebuilt-plugins"
-            elif command -v unzip >/dev/null 2>&1; then
-              unzip -o "$QEMU_WORKDIR/prebuilt-plugins.bundle" -d "$QEMU_WORKDIR/prebuilt-plugins"
-            else
-              echo "Unsupported prebuilt plugin bundle format" >&2
-              exit 1
-            fi
-
-            find "$QEMU_WORKDIR/prebuilt-plugins" -type f -name '*.so' -exec cp -v {} artifacts/plugins/ \;
-          fi
-
-          if [[ "$input_dir" != "artifacts/plugins" && -d "$input_dir" ]]; then
-            echo "Copying prebuilt plugin files from: $input_dir"
-            find "$input_dir" -maxdepth 2 -type f -name '*.so' -exec cp -v {} artifacts/plugins/ \;
-          fi
-
-          test -n "$(ls -A artifacts/plugins/*.so 2>/dev/null || true)" || {
-            echo "No prebuilt plugin .so files found." >&2
-            echo "Provide either workflow input 'prebuilt_plugin_bundle_url' or place .so files under the directory in 'prebuilt_plugin_dir'." >&2
-            exit 1
-          }
-
-          ls -lh artifacts/plugins
 
       - name: Install QEMU and SSH tools
         run: |
@@ -448,16 +396,11 @@ jobs:
           exit 1
 
       - name: Copy new plugin .so into QEMU
-        if: always()
+        if: ${{ env.SKIP_COMPONENT_BUILD != 'true' }}
         env:
           QEMU_SSH_PRIVATE_KEY: ${{ secrets.QEMU_SSH_PRIVATE_KEY }}
         run: |
           set -euo pipefail
-
-          test -n "$(ls -A artifacts/plugins/*.so 2>/dev/null || true)" || {
-            echo "No plugin .so files available in artifacts/plugins for QEMU deployment" >&2
-            exit 1
-          }
 
           if [[ -f "$QEMU_WORKDIR/ssh-target.env" ]]; then
             # shellcheck disable=SC1090

@@ -27,7 +27,7 @@ jobs:
       VCOMPONENT_HOST_PORT: '58080'
       QEMU_SSH_USER: root
       QEMU_GUEST_LIB_DIR: /usr/lib/wpeframework/plugins
-      SKIP_COMPONENT_BUILD: 'true'
+      SKIP_COMPONENT_BUILD: 'false'
       GITHUB_IMAGE_ASSET_NAME: DefaultImage.tar.gz
       QEMU_RUN_SCRIPT_FILE: run_qemu.sh
 
@@ -395,6 +395,51 @@ jobs:
           ' || true
           exit 1
 
+      - name: Copy new plugin .so into QEMU
+        if: ${{ env.SKIP_COMPONENT_BUILD != 'true' }}
+        env:
+          QEMU_SSH_PRIVATE_KEY: ${{ secrets.QEMU_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+
+          if [[ -f "$QEMU_WORKDIR/ssh-target.env" ]]; then
+            # shellcheck disable=SC1090
+            source "$QEMU_WORKDIR/ssh-target.env"
+          fi
+
+          selected_ssh_port="${QEMU_SSH_PORT:-$SSH_HOST_PORT}"
+          selected_ssh_user="${QEMU_SSH_USER:-root}"
+
+          ssh_key_arg=()
+          if [[ -n "${QEMU_SSH_PRIVATE_KEY:-}" ]]; then
+            ssh_key_arg=(-i ~/.ssh/qemu_id_rsa)
+          fi
+
+          for sofile in artifacts/plugins/*.so; do
+            scp "${ssh_key_arg[@]}" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -P "$selected_ssh_port" "$sofile" "$selected_ssh_user@127.0.0.1:$QEMU_GUEST_LIB_DIR/"
+          done
+
+          ssh "${ssh_key_arg[@]}" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$selected_ssh_port" "$selected_ssh_user@127.0.0.1" '
+            sync
+            systemctl restart WPEFramework || systemctl restart wpeframework || true
+          '
+
+          # Ensure JSON-RPC endpoint is reachable again after plugin replacement + service restart.
+          for attempt in $(seq 1 30); do
+            if curl -sS --connect-timeout 2 --max-time 5 \
+              -H "Content-Type: application/json" \
+              --data '{"jsonrpc":"2.0","id":1,"method":"Controller.1.status"}' \
+              "http://127.0.0.1:${WPEFRAMEWORK_HOST_PORT}/jsonrpc" >/dev/null 2>&1; then
+              echo "WPEFramework is reachable after plugin deployment"
+              break
+            fi
+            sleep 2
+            if [[ "$attempt" -eq 30 ]]; then
+              echo "WPEFramework did not become reachable after plugin deployment" >&2
+              exit 1
+            fi
+          done
+
       - name: Pre-test WPEFramework verification
         if: always()
         env:
@@ -589,6 +634,8 @@ jobs:
 
           ssh "${ssh_key_arg[@]}" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$selected_ssh_port" "$selected_ssh_user@127.0.0.1" '
             set -e
+            systemctl restart WPEFramework || systemctl restart wpeframework || true
+            sleep 3
             chmod +x /tmp/hdmicecsource-gcov-report.sh
             /tmp/hdmicecsource-gcov-report.sh /tmp/hdmicecsource-coverage
             ls -lh /tmp/hdmicecsource-coverage/
@@ -680,32 +727,6 @@ jobs:
               tail -n 120 "$logfile" 2>/dev/null || true
             done
           ' > "$QEMU_WORKDIR/guest-wpeframework-diagnostics.log" 2>&1 || true
-
-      - name: Copy new plugin .so into QEMU
-        if: ${{ env.SKIP_COMPONENT_BUILD != 'true' }}
-        env:
-          QEMU_SSH_PRIVATE_KEY: ${{ secrets.QEMU_SSH_PRIVATE_KEY }}
-        run: |
-          set -euo pipefail
-
-          if [[ -f "$QEMU_WORKDIR/ssh-target.env" ]]; then
-            # shellcheck disable=SC1090
-            source "$QEMU_WORKDIR/ssh-target.env"
-          fi
-
-          selected_ssh_port="${QEMU_SSH_PORT:-$SSH_HOST_PORT}"
-          selected_ssh_user="${QEMU_SSH_USER:-root}"
-
-          ssh_key_arg=()
-          if [[ -n "${QEMU_SSH_PRIVATE_KEY:-}" ]]; then
-            ssh_key_arg=(-i ~/.ssh/qemu_id_rsa)
-          fi
-
-          for sofile in artifacts/plugins/*.so; do
-            scp "${ssh_key_arg[@]}" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -P "$selected_ssh_port" "$sofile" "$selected_ssh_user@127.0.0.1:$QEMU_GUEST_LIB_DIR/"
-          done
-
-          ssh "${ssh_key_arg[@]}" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$selected_ssh_port" "$selected_ssh_user@127.0.0.1" "sync; systemctl restart WPEFramework || true"
 
       - name: Upload logs and plugin artifacts
         if: always()

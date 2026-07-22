@@ -441,6 +441,30 @@ jobs:
               -H "Content-Type: application/json" \
               --data "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"Controller.1.status\"}" \
               "http://127.0.0.1:9998/jsonrpc" || true
+
+            echo "===== pre-test: HdmiCecSource plugin files ====="
+            ls -l /usr/lib/wpeframework/plugins/libWPEFrameworkHdmiCecSource.so \
+              /usr/lib/wpeframework/plugins/libWPEFrameworkHdmiCecSourceImplementation.so 2>/dev/null || true
+
+            echo "===== pre-test: HdmiCecSource plugin dependencies ====="
+            if command -v ldd >/dev/null 2>&1; then
+              ldd /usr/lib/wpeframework/plugins/libWPEFrameworkHdmiCecSource.so 2>/dev/null || true
+              ldd /usr/lib/wpeframework/plugins/libWPEFrameworkHdmiCecSourceImplementation.so 2>/dev/null || true
+            else
+              echo "ldd not available in guest"
+            fi
+
+            echo "===== pre-test: direct local plugin activation ====="
+            curl -sS --connect-timeout 2 --max-time 6 \
+              -H "Content-Type: application/json" \
+              --data "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"Controller.1.activate\",\"params\":{\"callsign\":\"org.rdk.HdmiCecSource\"}}" \
+              "http://127.0.0.1:9998/jsonrpc" || true
+
+            echo "===== pre-test: direct local plugin status ====="
+            curl -sS --connect-timeout 2 --max-time 6 \
+              -H "Content-Type: application/json" \
+              --data "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"Controller.1.status@org.rdk.HdmiCecSource\"}" \
+              "http://127.0.0.1:9998/jsonrpc" || true
           ' > "$QEMU_WORKDIR/pretest-wpeframework-check.log" 2>&1 || true
 
       - name: Run HDMI CEC vDevice tests

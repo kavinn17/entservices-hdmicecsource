@@ -78,15 +78,42 @@ jobs:
       - name: Install QEMU and SSH tools
         run: |
           set -euo pipefail
-          apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+
+          # Report what is already present so we can skip unnecessary installs.
+          already_ok=true
+          for cmd in qemu-system-x86_64 ssh curl jq nc git-lfs; do
+            if ! command -v "$cmd" >/dev/null 2>&1; then
+              already_ok=false
+              echo "Missing: $cmd"
+            else
+              echo "Already available: $cmd ($(command -v "$cmd"))"
+            fi
+          done
+
+          if [[ "$already_ok" == "true" ]]; then
+            echo "All required tools already present in container image. Skipping apt-get."
+            exit 0
+          fi
+
+          # Retry apt-get update up to 3 times to handle transient mirror failures.
+          for attempt in 1 2 3; do
+            apt-get update && break || {
+              echo "apt-get update failed (attempt $attempt/3), retrying in 10s..."
+              sleep 10
+            }
+          done
+
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends --fix-missing \
             qemu-system-x86 \
             openssh-client \
             curl \
             jq \
             ca-certificates \
             netcat-openbsd \
-            git-lfs
+            git-lfs || {
+            echo "apt-get install failed. Checking if critical tools are available anyway..."
+            command -v qemu-system-x86_64 || { echo "qemu-system-x86_64 is not available" >&2; exit 1; }
+          }
 
       - name: Pull Git LFS assets for QEMU images
         run: |

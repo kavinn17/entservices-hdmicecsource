@@ -174,17 +174,35 @@ def activate_plugin_with_retry(callsign, retries=25, delay_seconds=2):
         log_info(f"Plugin already responsive: {callsign}")
         return True
 
-    for attempt in range(1, retries + 1):
-        response = send_jsonrpc_command(
-            "Controller.1.activate",
-            params={"callsign": callsign},
-            request_id=1234567890 + attempt,
-        )
+    activate_methods = [
+        "Controller.1.activate",
+        "Controller.activate",
+    ]
 
-        if isinstance(response, dict) and "error" not in response and "result" in response:
-            return True
+    for attempt in range(1, retries + 1):
+        activated = False
+
+        for method in activate_methods:
+            response = send_jsonrpc_command(
+                method,
+                params={"callsign": callsign},
+                request_id=1234567890 + attempt,
+            )
+
+            if isinstance(response, dict) and "error" not in response and "result" in response:
+                activated = True
+                break
+
+            if isinstance(response, dict) and "error" in response:
+                log_info(
+                    f"Activation response via {method} attempt {attempt}: {response.get('error')}"
+                )
 
         # Some builds can return non-success for activate while plugin becomes ready shortly after.
+        if activated:
+            if plugin_api_ready(callsign):
+                return True
+
         if plugin_api_ready(callsign):
             log_info(f"Plugin became responsive after activation attempt {attempt}: {callsign}")
             return True

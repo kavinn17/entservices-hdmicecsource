@@ -415,30 +415,58 @@ jobs:
             ssh_key_arg=(-i ~/.ssh/qemu_id_rsa)
           fi
 
+          ssh_opts=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR)
+
           for sofile in artifacts/plugins/*.so; do
-            scp "${ssh_key_arg[@]}" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -P "$selected_ssh_port" "$sofile" "$selected_ssh_user@127.0.0.1:$QEMU_GUEST_LIB_DIR/"
+            scp "${ssh_key_arg[@]}" "${ssh_opts[@]}" -P "$selected_ssh_port" "$sofile" "$selected_ssh_user@127.0.0.1:$QEMU_GUEST_LIB_DIR/"
           done
 
-          ssh "${ssh_key_arg[@]}" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$selected_ssh_port" "$selected_ssh_user@127.0.0.1" '
+          ssh "${ssh_key_arg[@]}" "${ssh_opts[@]}" -p "$selected_ssh_port" "$selected_ssh_user@127.0.0.1" '
+            set -e
             sync
-            systemctl restart WPEFramework || systemctl restart wpeframework || true
-          '
+            restarted_service=""
+            for svc in wpeframework WPEFramework thunder; do
+              if systemctl cat "$svc" >/dev/null 2>&1; then
+                systemctl restart "$svc"
+                restarted_service="$svc"
+                break
+              fi
+            done
 
-          # Ensure JSON-RPC endpoint is reachable again after plugin replacement + service restart.
-          for attempt in $(seq 1 30); do
-            if curl -sS --connect-timeout 2 --max-time 5 \
-              -H "Content-Type: application/json" \
-              --data '{"jsonrpc":"2.0","id":1,"method":"Controller.1.status"}' \
-              "http://127.0.0.1:${WPEFRAMEWORK_HOST_PORT}/jsonrpc" >/dev/null 2>&1; then
-              echo "WPEFramework is reachable after plugin deployment"
-              break
+            if [ -z "$restarted_service" ]; then
+              echo "No known framework service unit found; continuing without explicit restart"
+            else
+              echo "Restarted framework service: $restarted_service"
             fi
-            sleep 2
-            if [[ "$attempt" -eq 30 ]]; then
-              echo "WPEFramework did not become reachable after plugin deployment" >&2
+
+            # Validate framework API inside guest to avoid host-forward timing issues.
+            ready=0
+            for attempt in $(seq 1 30); do
+              if curl -sS --connect-timeout 2 --max-time 5 \
+                -H "Content-Type: application/json" \
+                --data "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"Controller.1.status\"}" \
+                "http://127.0.0.1:9998/jsonrpc" >/dev/null 2>&1; then
+                ready=1
+                break
+              fi
+
+              if curl -sS --connect-timeout 2 --max-time 5 \
+                -H "Content-Type: application/json" \
+                --data "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"Controller.1.status\"}" \
+                "http://127.0.0.1:9998/Service" >/dev/null 2>&1; then
+                ready=1
+                break
+              fi
+              sleep 2
+            done
+
+            if [ "$ready" -ne 1 ]; then
+              echo "Framework JSON-RPC did not become reachable after plugin deployment" >&2
               exit 1
             fi
-          done
+          '
+
+          echo "Plugin deployment to guest completed and framework API is reachable"
 
       - name: Pre-test WPEFramework verification
         if: always()

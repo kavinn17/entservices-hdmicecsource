@@ -35,7 +35,6 @@ import sys
 import time
 from pathlib import Path
 import os
-import shutil
 import subprocess
 
 from utils import log_error, log_info, log_success, send_jsonrpc_command, WPEFRAMEWORK_JSONRPC_URL
@@ -111,13 +110,6 @@ SUITE_PROFILE_SCRIPTS = {
 SUITE_RDK_PROFILES = {
     "hdmicecsource": "STB",
 }
-
-COVERAGE_REPORT_SCRIPT = str(BASE_DIR / "hdmicecsource-gcov-report.sh")
-COVERAGE_DEFAULT_OUTPUT = "/tmp/hdmicecsource-coverage"
-COVERAGE_GCOV_COMPONENT_DIR = "/tmp/gcov/entservices-hdmicecsource"
-COVERAGE_GCOV_ROOT = "/tmp/gcov"
-GCDA_TAG_PLUGIN = "entservices-hdmicecsource"
-GCDA_TAG_CCEC = "hdmicec"
 
 
 def normalize_suite_name(raw_name):
@@ -280,233 +272,17 @@ def set_rdk_profile_via_script(suite_name, profile):
     return False
 
 
-def _run_command(cmd, description, cwd=None):
-    try:
-        result = subprocess.run(
-            cmd,
-            check=False,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            cwd=cwd,
-        )
-    except Exception as exc:
-        log_error(f"{description} failed to execute: {exc}")
-        return False
-
-    if result.returncode == 0:
-        log_success(f"{description} succeeded")
-        return True
-
-    stderr = (result.stderr or "").strip()
-    stdout = (result.stdout or "").strip()
-    details = stderr if stderr else stdout
-    if details:
-        log_error(f"{description} failed: {details}")
-    else:
-        log_error(f"{description} failed with rc={result.returncode}")
-    return False
-
-
-def restart_wpeframework_service():
-    if _run_command(["systemctl", "restart", "wpeframework"], "Restart service wpeframework"):
-        return True
-    return _run_command(["systemctl", "restart", "WPEFramework"], "Restart service WPEFramework")
-
-
-def prepare_clean_coverage(output_dir):
-    ok = True
-
-    if Path(output_dir).exists():
-        try:
-            shutil.rmtree(output_dir)
-            log_info(f"Removed old coverage output: {output_dir}")
-        except Exception as exc:
-            log_error(f"Failed to remove old coverage output {output_dir}: {exc}")
-            ok = False
-
-    gcov_root = Path(COVERAGE_GCOV_ROOT)
-    if gcov_root.exists():
-        removed_paths = 0
-        try:
-            # Remove all stale coverage artifacts that belong to this component,
-            # even when they are nested under debug-source paths.
-            for path in gcov_root.rglob("*"):
-                p = str(path)
-                if "entservices-hdmicecsource" not in p:
-                    continue
-                try:
-                    if path.is_file():
-                        path.unlink()
-                        removed_paths += 1
-                    elif path.is_dir() and path.exists():
-                        shutil.rmtree(path)
-                        removed_paths += 1
-                except Exception as inner_exc:
-                    log_error(f"Failed to remove stale gcov path {path}: {inner_exc}")
-                    ok = False
-            if removed_paths > 0:
-                log_info(
-                    f"Removed old gcov artifacts for entservices-hdmicecsource: {removed_paths} paths"
-                )
-            else:
-                log_info("No old entservices-hdmicecsource gcov artifacts found under /tmp/gcov")
-        except Exception as exc:
-            log_error(f"Failed to traverse {COVERAGE_GCOV_ROOT} for cleanup: {exc}")
-            ok = False
-    elif Path(COVERAGE_GCOV_COMPONENT_DIR).exists():
-        # Backward compatibility for legacy flat layout.
-        try:
-            shutil.rmtree(COVERAGE_GCOV_COMPONENT_DIR)
-            log_info(f"Removed old gcov data: {COVERAGE_GCOV_COMPONENT_DIR}")
-        except Exception as exc:
-            log_error(f"Failed to remove old gcov data {COVERAGE_GCOV_COMPONENT_DIR}: {exc}")
-            ok = False
-
-    return ok
-
-
-def count_component_gcda_files(tags=None):
-    root = Path(COVERAGE_GCOV_ROOT)
-    if not root.exists():
-        return 0
-
-    if not tags:
-        tags = [GCDA_TAG_PLUGIN]
-
-    count = 0
-    for p in root.rglob("*.gcda"):
-        path = str(p)
-        if any(tag in path for tag in tags):
-            count += 1
-    return count
-
-
-def list_component_gcda_files(limit=20, tags=None):
-    root = Path(COVERAGE_GCOV_ROOT)
-    if not root.exists():
-        return []
-
-    if not tags:
-        tags = [GCDA_TAG_PLUGIN]
-
-    files = []
-    for p in root.rglob("*.gcda"):
-        path = str(p)
-        if any(tag in path for tag in tags):
-            files.append(str(p))
-            if len(files) >= limit:
-                break
-    return files
-
-
-def generate_coverage_report(output_dir):
-    return _run_command(
-        [COVERAGE_REPORT_SCRIPT, output_dir],
-        f"Generate HdmiCecSource coverage report at {output_dir}",
-        cwd=str(BASE_DIR),
-    )
-
-
-def _pct(hit, total):
-    if total <= 0:
-        return None
-    return (100.0 * hit) / total
-
-
-def parse_coverage_info(coverage_info_path):
-    totals = {
-        "lines_found": 0,
-        "lines_hit": 0,
-        "funcs_found": 0,
-        "funcs_hit": 0,
-        "branches_found": 0,
-        "branches_hit": 0,
-    }
-
-    try:
-        with open(coverage_info_path, "r", encoding="utf-8", errors="ignore") as fh:
-            for raw in fh:
-                line = raw.strip()
-                if line.startswith("LF:"):
-                    totals["lines_found"] += int(line[3:])
-                elif line.startswith("LH:"):
-                    totals["lines_hit"] += int(line[3:])
-                elif line.startswith("FNF:"):
-                    totals["funcs_found"] += int(line[4:])
-                elif line.startswith("FNH:"):
-                    totals["funcs_hit"] += int(line[4:])
-                elif line.startswith("BRF:"):
-                    totals["branches_found"] += int(line[4:])
-                elif line.startswith("BRH:"):
-                    totals["branches_hit"] += int(line[4:])
-    except Exception as exc:
-        log_error(f"Failed to parse coverage info {coverage_info_path}: {exc}")
-        return None
-
-    return totals
-
-
-def print_coverage_summary(coverage_output):
-    coverage_info = Path(coverage_output) / "coverage.info"
-    if not coverage_info.is_file():
-        log_error(f"Coverage info not found: {coverage_info}")
-        return
-
-    totals = parse_coverage_info(str(coverage_info))
-    if not totals:
-        return
-
-    line_pct = _pct(totals["lines_hit"], totals["lines_found"])
-    func_pct = _pct(totals["funcs_hit"], totals["funcs_found"])
-    branch_pct = _pct(totals["branches_hit"], totals["branches_found"])
-
-    log_info(f"Reading tracefile {coverage_info}")
-    log_info("Summary coverage rate:")
-
-    if line_pct is None:
-        log_info("  lines......: no data found")
-    else:
-        log_info(
-            f"  lines......: {line_pct:.1f}% ({totals['lines_hit']} of {totals['lines_found']} lines)"
-        )
-
-    if func_pct is None:
-        log_info("  functions..: no data found")
-    else:
-        log_info(
-            f"  functions..: {func_pct:.1f}% ({totals['funcs_hit']} of {totals['funcs_found']} functions)"
-        )
-
-    if branch_pct is None:
-        log_info("  branches...: no data found")
-    else:
-        log_info(
-            f"  branches...: {branch_pct:.1f}% ({totals['branches_hit']} of {totals['branches_found']} branches)"
-        )
-
-    # Print per-component summaries if the report script produced split info files.
-    for label, name in (("Plugin", "plugin.info"), ("CCEC", "ccec.info")):
-        path = Path(coverage_output) / name
-        if not path.is_file():
-            continue
-        subtotals = parse_coverage_info(str(path))
-        if not subtotals:
-            continue
-        l_pct = _pct(subtotals["lines_hit"], subtotals["lines_found"])
-        f_pct = _pct(subtotals["funcs_hit"], subtotals["funcs_found"])
-        if l_pct is None or f_pct is None:
-            log_info(f"  {label}....: no data found")
-        else:
-            log_info(
-                f"  {label}....: lines {l_pct:.1f}% ({subtotals['lines_hit']} of {subtotals['lines_found']}), "
-                f"functions {f_pct:.1f}% ({subtotals['funcs_hit']} of {subtotals['funcs_found']})"
-            )
-
-
-def run_suite(suite_name, auto_coverage=False, coverage_output=COVERAGE_DEFAULT_OUTPUT):
+def run_suite(suite_name):
     banner, test_cases = load_test_cases(suite_name)
     print(banner)
+
+    expected_count = 44
+    if len(test_cases) != expected_count:
+        log_error(
+            f"Expected {expected_count} testcases, but found {len(test_cases)} in suite '{suite_name}'"
+        )
+        return False
+    log_info(f"Running exactly {expected_count} testcases for suite '{suite_name}'")
 
     # Flow requirement: profile is always set from suite defaults (STB for hdmicecsource).
     profile = SUITE_RDK_PROFILES.get(suite_name)
@@ -517,17 +293,6 @@ def run_suite(suite_name, auto_coverage=False, coverage_output=COVERAGE_DEFAULT_
             log_error("Aborting suite because RDK profile setup failed.")
             return False
         log_success(f"RDK profile set to {profile}")
-
-    if auto_coverage and suite_name == "hdmicecsource":
-        log_info("Preparing fresh gcov session for HdmiCecSource")
-        cleanup_ok = prepare_clean_coverage(coverage_output)
-        restart_ok = restart_wpeframework_service()
-        log_info("Waiting 6s after WPEFramework restart...")
-        time.sleep(6)
-        if not cleanup_ok:
-            log_error("Coverage cleanup encountered errors; continuing test execution")
-        if not restart_ok:
-            log_error("WPEFramework restart failed; continuing test execution")
 
     auto_activate = os.environ.get("AUTO_ACTIVATE_PLUGINS", "1").lower() not in ("0", "false", "no")
     callsign = SUITE_PLUGIN_CALLSIGNS.get(suite_name)
@@ -585,38 +350,12 @@ def run_suite(suite_name, auto_coverage=False, coverage_output=COVERAGE_DEFAULT_
 
         time.sleep(1)
 
+    total = passed + failed
     log_info(f"\n{'='*60}")
-    log_info(f"Suite Summary: {passed} passed, {failed} failed")
+    log_info(f"Suite Summary: total={total}, passed={passed}, failed={failed}")
     if failed_cases:
         log_error(f"Failed cases: {failed_cases}")
     log_info(f"{'='*60}")
-
-    if auto_coverage and suite_name == "hdmicecsource":
-        log_info("Generating fresh HdmiCecSource coverage report")
-        # Restart once to force process-exit gcov flush before report collection.
-        # Without this, some runs can under-report with very low gcda presence.
-        log_info("Flushing gcov data by restarting WPEFramework before report...")
-        restart_ok = restart_wpeframework_service()
-        log_info("Waiting 4s after pre-report WPEFramework restart...")
-        time.sleep(4)
-        if not restart_ok:
-            log_error("Pre-report WPEFramework restart failed; continuing with current gcda state")
-
-        plugin_gcda = count_component_gcda_files(tags=[GCDA_TAG_PLUGIN])
-        ccec_gcda = count_component_gcda_files(tags=[GCDA_TAG_CCEC])
-        gcda_count = plugin_gcda + ccec_gcda
-        log_info(
-            "Detected HdmiCecSource/CCEC gcda files before report: "
-            f"{gcda_count} (plugin={plugin_gcda}, ccec={ccec_gcda})"
-        )
-        gcda_files = list_component_gcda_files(limit=15, tags=[GCDA_TAG_PLUGIN, GCDA_TAG_CCEC])
-        for idx, gcda_path in enumerate(gcda_files, start=1):
-            log_info(f"  gcda[{idx}]: {gcda_path}")
-        if not generate_coverage_report(coverage_output):
-            log_error("Coverage report generation failed")
-        else:
-            log_success(f"Coverage report generated: {coverage_output}")
-            print_coverage_summary(coverage_output)
 
     return failed == 0
 
@@ -639,15 +378,5 @@ if __name__ == "__main__":
     if timing_enabled:
         os.environ["HDMICEC_TIMING_ENABLED"] = "1"
 
-    auto_coverage_enabled = os.environ.get("HDMICEC_AUTO_COVERAGE", "1").lower() not in (
-        "0",
-        "false",
-        "no",
-    )
-
-    ok = run_suite(
-        "hdmicecsource",
-        auto_coverage=auto_coverage_enabled,
-        coverage_output=COVERAGE_DEFAULT_OUTPUT,
-    )
+    ok = run_suite("hdmicecsource")
     sys.exit(0 if ok else 1)

@@ -516,6 +516,21 @@ jobs:
             ssh_key_arg=(-i ~/.ssh/qemu_id_rsa)
           fi
 
+          # HdmiCecSource reads RDK_PROFILE from the guest filesystem, not from the host runner.
+          ssh "${ssh_key_arg[@]}" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$selected_ssh_port" "$selected_ssh_user@127.0.0.1" '
+            set -eu
+            if [[ -f /etc/device.properties ]]; then
+              if grep -q "^RDK_PROFILE=" /etc/device.properties; then
+                sed -i "s/^RDK_PROFILE=.*/RDK_PROFILE=STB/" /etc/device.properties
+              else
+                printf "\nRDK_PROFILE=STB\n" >> /etc/device.properties
+              fi
+            else
+              printf "RDK_PROFILE=STB\n" > /etc/device.properties
+            fi
+            echo "guest RDK_PROFILE: $(grep '^RDK_PROFILE=' /etc/device.properties || true)"
+          '
+
           # Tunnel guest localhost endpoints to local high ports so test traffic is not dependent on QEMU hostfwd behavior.
           JSONRPC_TUNNEL_PORT=59999
           VCOMPONENT_TUNNEL_PORT=58081

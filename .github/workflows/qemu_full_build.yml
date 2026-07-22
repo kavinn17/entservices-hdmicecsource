@@ -516,7 +516,7 @@ jobs:
           export TARGET_HOST=127.0.0.1
           export JSONRPC_PORT="$JSONRPC_TUNNEL_PORT"
           export VCOMPONENT_PORT="$VCOMPONENT_TUNNEL_PORT"
-          export WPEFRAMEWORK_JSONRPC_URL="http://127.0.0.1:${JSONRPC_TUNNEL_PORT}/Service"
+          export WPEFRAMEWORK_JSONRPC_URL="http://127.0.0.1:${JSONRPC_TUNNEL_PORT}/jsonrpc"
           echo "Final WPEFramework endpoint: $WPEFRAMEWORK_JSONRPC_URL"
           export HDMICEC_AUTO_COVERAGE=0
           python3 SuitManager.py | tee "$QEMU_WORKDIR/vdevice-tests.log"

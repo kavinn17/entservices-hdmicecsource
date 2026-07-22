@@ -639,9 +639,15 @@ if __name__ == "__main__":
     if timing_enabled:
         os.environ["HDMICEC_TIMING_ENABLED"] = "1"
 
+    auto_coverage_enabled = os.environ.get("HDMICEC_AUTO_COVERAGE", "1").lower() not in (
+        "0",
+        "false",
+        "no",
+    )
+
     ok = run_suite(
         "hdmicecsource",
-        auto_coverage=True,
+        auto_coverage=auto_coverage_enabled,
         coverage_output=COVERAGE_DEFAULT_OUTPUT,
     )
     sys.exit(0 if ok else 1)

@@ -389,11 +389,59 @@ jobs:
               done
             fi
             echo "===== WPEFramework related processes ====="
-            ps -ef | grep -Ei "wpeframework|wpe|thunder" | grep -v grep || true
+            ps w | grep -Ei "wpeframework|wpe|thunder" | grep -v grep || true
             echo "===== vComponent related processes ====="
-            ps -ef | grep -Ei "vcomponent|hdmicec" | grep -v grep || true
+            ps w | grep -Ei "vcomponent|hdmicec" | grep -v grep || true
           ' || true
           exit 1
+
+      - name: Pre-test WPEFramework verification
+        if: always()
+        env:
+          QEMU_SSH_PRIVATE_KEY: ${{ secrets.QEMU_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+
+          if [[ -f "$QEMU_WORKDIR/ssh-target.env" ]]; then
+            # shellcheck disable=SC1090
+            source "$QEMU_WORKDIR/ssh-target.env"
+          fi
+
+          selected_ssh_port="${QEMU_SSH_PORT:-$SSH_HOST_PORT}"
+          selected_ssh_user="${QEMU_SSH_USER:-root}"
+
+          ssh_key_arg=()
+          if [[ -n "${QEMU_SSH_PRIVATE_KEY:-}" ]]; then
+            ssh_key_arg=(-i ~/.ssh/qemu_id_rsa)
+          fi
+
+          ssh "${ssh_key_arg[@]}" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$selected_ssh_port" "$selected_ssh_user@127.0.0.1" '
+            echo "===== pre-test: wpeframework service state ====="
+            systemctl is-active wpeframework WPEFramework 2>/dev/null || true
+            systemctl status wpeframework WPEFramework --no-pager 2>/dev/null | head -n 60 || true
+
+            echo "===== pre-test: listening ports ====="
+            if command -v ss >/dev/null 2>&1; then
+              ss -ltnp | grep -E ":9998|:8080" || true
+            elif command -v netstat >/dev/null 2>&1; then
+              netstat -ltnp | grep -E ":9998|:8080" || true
+            fi
+
+            echo "===== pre-test: recent WPE logs ====="
+            journalctl -u wpeframework -u WPEFramework -n 120 --no-pager 2>/dev/null || true
+
+            echo "===== pre-test: guest JSON-RPC probe (/Service) ====="
+            curl -sS --connect-timeout 2 --max-time 6 \
+              -H "Content-Type: application/json" \
+              --data "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"Controller.1.status\"}" \
+              "http://127.0.0.1:9998/Service" || true
+
+            echo "===== pre-test: guest JSON-RPC probe (/jsonrpc) ====="
+            curl -sS --connect-timeout 2 --max-time 6 \
+              -H "Content-Type: application/json" \
+              --data "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"Controller.1.status\"}" \
+              "http://127.0.0.1:9998/jsonrpc" || true
+          ' > "$QEMU_WORKDIR/pretest-wpeframework-check.log" 2>&1 || true
 
       - name: Run HDMI CEC vDevice tests
         env:
@@ -495,7 +543,7 @@ jobs:
 
           ssh "${ssh_key_arg[@]}" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$selected_ssh_port" "$selected_ssh_user@127.0.0.1" '
             echo "===== ps ====="
-            ps -ef | grep -Ei "wpeframework|thunder|hdmicec" | grep -v grep || true
+            ps w | grep -Ei "wpeframework|thunder|hdmicec" | grep -v grep || true
             echo "===== listening ports ====="
             if command -v ss >/dev/null 2>&1; then
               ss -ltnp || true

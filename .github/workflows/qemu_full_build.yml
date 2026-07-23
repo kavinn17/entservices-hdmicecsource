@@ -43,7 +43,22 @@ jobs:
       - name: Build entservices-hdmicecsource
         if: ${{ env.SKIP_COMPONENT_BUILD != 'true' }}
         run: |
-          sh -x Tests/vDeviceTests/qemu_cov_build.sh
+          set -euo pipefail
+
+          echo "Workspace: $GITHUB_WORKSPACE"
+          ls -la "$GITHUB_WORKSPACE/Tests" || true
+          ls -la "$GITHUB_WORKSPACE/Tests/vDeviceTests" || true
+
+          if [[ -f "$GITHUB_WORKSPACE/Tests/vDeviceTests/qemu_cov_build.sh" ]]; then
+            sh -x "$GITHUB_WORKSPACE/Tests/vDeviceTests/qemu_cov_build.sh"
+          elif [[ -f "$GITHUB_WORKSPACE/cov_build.sh" ]]; then
+            echo "qemu_cov_build.sh not found; falling back to cov_build.sh"
+            sh -x "$GITHUB_WORKSPACE/cov_build.sh"
+          else
+            echo "Neither qemu_cov_build.sh nor cov_build.sh is available in checkout" >&2
+            exit 1
+          fi
+
           echo "===== built plugin .so files ====="
           find "$PWD/install" -type f -name '*.so' | grep '/plugins/' | xargs -r ls -lh
 

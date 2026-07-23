@@ -67,8 +67,15 @@ jobs:
         run: |
           set -euo pipefail
 
+          mkdir -p "$QEMU_WORKDIR"
+
           echo "===== plugin source commit metadata ====="
-          git -C "$GITHUB_WORKSPACE" log -1 --pretty='format:commit=%H%nshort=%h%nauthor=%an%ndate=%cI%nsubject=%s' | tee "$QEMU_WORKDIR/plugin-source-commit.txt"
+          {
+            git config --global --add safe.directory "$GITHUB_WORKSPACE" || true
+            git -C "$GITHUB_WORKSPACE" log -1 --pretty='format:commit=%H%nshort=%h%nauthor=%an%ndate=%cI%nsubject=%s'
+          } | tee "$QEMU_WORKDIR/plugin-source-commit.txt" || {
+            echo "Plugin commit metadata unavailable in this runner context" | tee "$QEMU_WORKDIR/plugin-source-commit.txt"
+          }
 
           mkdir -p artifacts/plugins
           find "$PWD/install" -type f -name '*.so' | grep '/plugins/' | tee artifacts/plugins/so-list.txt

@@ -511,7 +511,7 @@ jobs:
             for sofile in artifacts/plugins/*.so; do
               fname="$(basename "$sofile")"
               expected_sha="${local_sha_by_file[$fname]}"
-              guest_sha="$(ssh "${ssh_key_arg[@]}" "${ssh_opts[@]}" -p "$selected_ssh_port" "$selected_ssh_user@127.0.0.1" "sha256sum '$QEMU_GUEST_LIB_DIR/$fname' 2>/dev/null | awk '{print \\$1}'")"
+              guest_sha="$(ssh "${ssh_key_arg[@]}" "${ssh_opts[@]}" -p "$selected_ssh_port" "$selected_ssh_user@127.0.0.1" "sha256sum '$QEMU_GUEST_LIB_DIR/$fname' 2>/dev/null | cut -d ' ' -f1")"
 
               if [[ -z "$guest_sha" ]]; then
                 echo "Missing guest plugin file: $QEMU_GUEST_LIB_DIR/$fname" >&2

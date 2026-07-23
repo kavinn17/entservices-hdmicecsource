@@ -493,12 +493,13 @@ jobs:
 
           # Capture local checksums so we can prove guest received the exact same binaries.
           declare -A local_sha_by_file
+          : > "$QEMU_WORKDIR/plugin-local-sha256.txt"
           for sofile in artifacts/plugins/*.so; do
             fname="$(basename "$sofile")"
             lsha="$(sha256sum "$sofile" | awk '{print $1}')"
             local_sha_by_file["$fname"]="$lsha"
-            echo "LOCAL_PLUGIN_SHA256 $fname $lsha"
-          done | tee "$QEMU_WORKDIR/plugin-local-sha256.txt"
+            echo "LOCAL_PLUGIN_SHA256 $fname $lsha" | tee -a "$QEMU_WORKDIR/plugin-local-sha256.txt"
+          done
 
           for sofile in artifacts/plugins/*.so; do
             scp "${ssh_key_arg[@]}" "${ssh_opts[@]}" -P "$selected_ssh_port" "$sofile" "$selected_ssh_user@127.0.0.1:$QEMU_GUEST_LIB_DIR/"

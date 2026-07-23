@@ -629,7 +629,7 @@ jobs:
                 ls -lh "$pso"
                 sha256sum "$pso"
                 file "$pso"
-                strings "$pso" 2>/dev/null | grep -E '^(API_VERSION|PLUGIN_VERSION|Version|v[0-9]+\.[0-9]+)' | head -n 10 || true
+                strings "$pso" 2>/dev/null | grep -E "^(API_VERSION|PLUGIN_VERSION|Version|v[0-9]+[.][0-9]+)" | head -n 10 || true
               else
                 echo "MISSING: $pso" >&2
               fi

@@ -24,6 +24,17 @@ GITHUB_WORKSPACE="${PWD}"
 ls -la ${GITHUB_WORKSPACE}
 cd ${GITHUB_WORKSPACE}
 
+# Dependency refs can be overridden from environment when needed.
+THUNDERTOOLS_REF="${THUNDERTOOLS_REF:-R4.4.3}"
+THUNDER_REF="${THUNDER_REF:-R4.4.1}"
+# develop currently introduces APIs (e.g. ITools vector<ToolsKey>) that older
+# R4.4 ProxyStubGenerator cannot parse. Use a compatible baseline by default.
+ENT_APIS_REF="${ENT_APIS_REF:-build_branch}"
+ENT_HELPERS_REF="${ENT_HELPERS_REF:-develop}"
+TESTFRAMEWORK_REF="${TESTFRAMEWORK_REF:-1.0.17}"
+
+echo "Using refs: THUNDERTOOLS_REF=${THUNDERTOOLS_REF}, THUNDER_REF=${THUNDER_REF}, ENT_APIS_REF=${ENT_APIS_REF}, ENT_HELPERS_REF=${ENT_HELPERS_REF}, TESTFRAMEWORK_REF=${TESTFRAMEWORK_REF}"
+
 # # ############################# 
 #1. Install Dependencies and packages
 
@@ -35,17 +46,17 @@ pip install jsonref
 # Clone the required repositories
 
 
-git clone --branch  R4.4.3 https://github.com/rdkcentral/ThunderTools.git
+git clone --branch  "${THUNDERTOOLS_REF}" https://github.com/rdkcentral/ThunderTools.git
 
-git clone --branch R4.4.1 https://github.com/rdkcentral/Thunder.git
+git clone --branch "${THUNDER_REF}" https://github.com/rdkcentral/Thunder.git
 
-git clone --branch develop https://github.com/rdkcentral/entservices-apis.git
+git clone --branch "${ENT_APIS_REF}" https://github.com/rdkcentral/entservices-apis.git
 
 cd ..
-git clone --branch develop https://github.com/rdkcentral/entservices-helpers.git
+git clone --branch "${ENT_HELPERS_REF}" https://github.com/rdkcentral/entservices-helpers.git
 cd "$GITHUB_WORKSPACE"
 
-git clone --branch 1.0.17 https://github.com/rdkcentral/entservices-testframework.git
+git clone --branch "${TESTFRAMEWORK_REF}" https://github.com/rdkcentral/entservices-testframework.git
 
 ############################
 # Build Thunder-Tools

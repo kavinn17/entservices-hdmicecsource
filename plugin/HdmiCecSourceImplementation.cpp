@@ -508,6 +508,7 @@ namespace WPEFramework
     }
 
     void HdmiCecSourceImplementation::addDevice(const int logicalAddress) {
+	    LOGINFO("Test AIDL Test : %s \n", __func__);
 
 		if(!HdmiCecSourceImplementation::_instance)
 			return;

@@ -27,7 +27,7 @@ jobs:
       VCOMPONENT_HOST_PORT: '58080'
       QEMU_SSH_USER: root
       QEMU_GUEST_LIB_DIR: /usr/lib/wpeframework/plugins
-      SKIP_COMPONENT_BUILD: 'true'
+      SKIP_COMPONENT_BUILD: 'false'
       GITHUB_IMAGE_ASSET_NAME: DefaultImage.tar.gz
       QEMU_RUN_SCRIPT_FILE: run_qemu.sh
 

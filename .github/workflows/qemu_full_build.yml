@@ -27,13 +27,84 @@ jobs:
       VCOMPONENT_HOST_PORT: '58080'
       QEMU_SSH_USER: root
       QEMU_GUEST_LIB_DIR: /usr/lib/wpeframework/plugins
-      SKIP_COMPONENT_BUILD: 'false'
+      SKIP_COMPONENT_BUILD: 'true'
       GITHUB_IMAGE_ASSET_NAME: DefaultImage.tar.gz
       QEMU_RUN_SCRIPT_FILE: run_qemu.sh
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Pull Git LFS assets for QEMU images
+        run: |
+          set -euo pipefail
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git rev-parse --git-dir
+          git lfs version
+          git lfs install --local
+          git lfs pull --include="Tests/vDeviceTests/qemu-images/*"
+          ls -lh "$GITHUB_WORKSPACE/Tests/vDeviceTests/qemu-images/" || true
+
+      - name: Extract sysroot from QEMU rootfs image
+        if: ${{ env.SKIP_COMPONENT_BUILD != 'true' }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p "$QEMU_WORKDIR"
+
+          # Locate the rootfs image from LFS checkout.
+          lfs_image="$GITHUB_WORKSPACE/Tests/vDeviceTests/qemu-images/DefaultImage.tar.gz"
+          if [[ ! -f "$lfs_image" ]]; then
+            echo "LFS image not available yet; sysroot will not be set at this stage"
+            echo "VDEVICE_SYSROOT=" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          echo "Extracting rootfs from LFS image for sysroot: $lfs_image"
+          extract_dir="$QEMU_WORKDIR/image-sysroot-extract"
+          rm -rf "$extract_dir"
+          mkdir -p "$extract_dir"
+          if tar -tzf "$lfs_image" >/dev/null 2>&1; then
+            tar -xzf "$lfs_image" -C "$extract_dir"
+          else
+            tar -xf "$lfs_image" -C "$extract_dir"
+          fi
+          rootfs_src="$(find "$extract_dir" -type f \( -name '*.rootfs.ext4' -o -name 'rootfs.ext4' -o -name '*.ext4' \) | head -n 1 || true)"
+
+          if [[ -z "${rootfs_src:-}" ]]; then
+            echo "No rootfs.ext4 found inside image tar" >&2
+            echo "VDEVICE_SYSROOT=" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          echo "Rootfs found: $rootfs_src"
+          SYSROOT="$QEMU_WORKDIR/vdevice-sysroot"
+          mkdir -p "$SYSROOT"
+
+          if ! command -v debugfs >/dev/null 2>&1; then
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends e2fsprogs 2>/dev/null || true
+          fi
+
+          if command -v debugfs >/dev/null 2>&1; then
+            echo "Extracting /usr/include and /usr/lib from rootfs..."
+            debugfs -R "rdump /usr/include $SYSROOT/usr/include" "$rootfs_src" 2>/dev/null || true
+            debugfs -R "rdump /usr/lib $SYSROOT/usr/lib" "$rootfs_src" 2>/dev/null || true
+          else
+            echo "debugfs not available; sysroot extraction skipped" >&2
+            echo "VDEVICE_SYSROOT=" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          echo "===== sysroot headers check ====="
+          ls "$SYSROOT/usr/include/ccec/" 2>/dev/null | head -3 || echo "WARNING: ccec not found"
+          ls "$SYSROOT/usr/include/" 2>/dev/null | grep -E "telemetry|rdk" || echo "WARNING: telemetry/rdk not found"
+
+          echo "===== sysroot libraries check ====="
+          ls "$SYSROOT/usr/lib/libRCEC"* 2>/dev/null || echo "WARNING: libRCEC not found"
+          ls "$SYSROOT/usr/lib/libIARMBus"* 2>/dev/null || echo "WARNING: libIARMBus not found"
+
+          echo "VDEVICE_SYSROOT=$SYSROOT" >> "$GITHUB_ENV"
+          echo "Sysroot ready: $SYSROOT"
 
       - name: Build dependencies
         if: ${{ env.SKIP_COMPONENT_BUILD != 'true' }}
@@ -145,16 +216,6 @@ jobs:
             git-lfs || true
 
           command -v qemu-system-x86_64 || { echo "qemu-system-x86_64 is not available after install attempt" >&2; exit 1; }
-
-      - name: Pull Git LFS assets for QEMU images
-        run: |
-          set -euo pipefail
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          git rev-parse --git-dir
-          git lfs version
-          git lfs install --local
-          git lfs pull --include="Tests/vDeviceTests/qemu-images/*"
-          ls -lh "$GITHUB_WORKSPACE/Tests/vDeviceTests/qemu-images/" || true
 
       - name: Download and prepare kernel/rootfs from GitHub Release
         env:

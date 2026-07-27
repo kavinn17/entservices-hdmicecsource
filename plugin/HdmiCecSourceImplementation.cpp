@@ -823,6 +823,12 @@ namespace WPEFramework
                      }
                  }
             }
+            else
+            {
+                LOGINFO("onHdmiHotPlug HDMI disconnected, resetting active source status");
+                isDeviceActiveSource = false;
+                sendActiveSourceEvent();
+            }
             return;
        }
 

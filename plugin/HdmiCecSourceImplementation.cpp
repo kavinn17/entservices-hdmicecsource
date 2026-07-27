@@ -1235,7 +1235,7 @@ namespace WPEFramework
             LOGINFO("Entered getLogicalAddress ");
 
             try{
-                LogicalAddress addr = LibCCEC::getInstance().getLogicalAddress(DEV_TYPE_TUNER);
+                LogicalAddress addr = LibCCEC::getInstance().getLogicalAddress(DeviceType::PLAYBACK_DEVICE);
 
                 std::string logicalAddrDeviceType = DeviceType(LogicalAddress(addr).getType()).toString();
 

@@ -121,7 +121,7 @@ jobs:
           ls -la "$GITHUB_WORKSPACE/Tests/vDeviceTests" || true
 
           if [[ -f "$GITHUB_WORKSPACE/Tests/vDeviceTests/qemu_cov_build.sh" ]]; then
-            sh -x "$GITHUB_WORKSPACE/Tests/vDeviceTests/qemu_cov_build.sh"
+            bash -x "$GITHUB_WORKSPACE/Tests/vDeviceTests/qemu_cov_build.sh"
           elif [[ -f "$GITHUB_WORKSPACE/cov_build.sh" ]]; then
             echo "qemu_cov_build.sh not found; falling back to cov_build.sh"
             sh -x "$GITHUB_WORKSPACE/cov_build.sh"

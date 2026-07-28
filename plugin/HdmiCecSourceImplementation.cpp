@@ -523,10 +523,23 @@ namespace WPEFramework
 			HdmiCecSourceImplementation::_instance->deviceList[logicalAddress].m_logicalAddress = LogicalAddress(logicalAddress);
 			HdmiCecSourceImplementation::_instance->m_numberOfDevices++;
 			LOGINFO("New cec logical address add notification send:  \r\n");
-            std::list<Exchange::IHdmiCecSource::INotification*>::const_iterator index(_hdmiCecSourceNotifications.begin());
-            while (index != _hdmiCecSourceNotifications.end()) {
-                (*index)->OnDeviceAdded(logicalAddress);
-                index++;
+            std::list<Exchange::IHdmiCecSource::INotification*> notifyList;
+            _adminLock.Lock();
+            try {
+                notifyList = _hdmiCecSourceNotifications;
+                for (auto* n : notifyList) { n->AddRef(); }
+            } catch (...) {
+                _adminLock.Unlock();
+                throw;
+            }
+            _adminLock.Unlock();
+            for (auto* n : notifyList) {
+                try {
+                    n->OnDeviceAdded(logicalAddress);
+                } catch (...) {
+                    LOGERR("Exception in OnDeviceAdded notification");
+                }
+                n->Release();
             }
 		}
 		//Two source devices can have same logical address.
@@ -546,11 +559,24 @@ namespace WPEFramework
 		{
 			_instance->m_numberOfDevices--;
 			_instance->deviceList[logicalAddress].clear();
-			LOGINFO("Cec ligical address remove notification send:  \r\n");
-            std::list<Exchange::IHdmiCecSource::INotification*>::const_iterator index(_hdmiCecSourceNotifications.begin());
-            while (index != _hdmiCecSourceNotifications.end()) {
-                (*index)->OnDeviceRemoved(logicalAddress);
-                index++;
+            LOGINFO("Cec logical address remove notification send:  \r\n");
+            std::list<Exchange::IHdmiCecSource::INotification*> notifyList;
+            _adminLock.Lock();
+            try {
+                notifyList = _hdmiCecSourceNotifications;
+                for (auto* n : notifyList) { n->AddRef(); }
+            } catch (...) {
+                _adminLock.Unlock();
+                throw;
+            }
+            _adminLock.Unlock();
+            for (auto* n : notifyList) {
+                try {
+                    n->OnDeviceRemoved(logicalAddress);
+                } catch (...) {
+                    LOGERR("Exception in OnDeviceRemoved notification");
+                }
+                n->Release();
             }
 
 		}
@@ -797,6 +823,12 @@ namespace WPEFramework
                      }
                  }
             }
+            else
+            {
+                LOGINFO("onHdmiHotPlug HDMI disconnected, resetting active source status");
+                isDeviceActiveSource = false;
+                sendActiveSourceEvent();
+            }
             return;
        }
 
@@ -1029,6 +1061,10 @@ namespace WPEFramework
                 }
             };
 
+            // Clear stale devices before opening connection to prevent race with incoming CEC messages.
+            removeAllCecDevices();
+            m_numberOfDevices = 0;
+
             try
             {
                 smConnection = new Connection(logicalAddress.toInt(),false,"ServiceManager::Connection::");
@@ -1079,7 +1115,6 @@ namespace WPEFramework
 
             LOGWARN("Start Thread %p", smConnection );
             m_pollThreadExit = false;
-            _instance->m_numberOfDevices = 0;
             pthread_mutex_init(&(_instance->m_lock), NULL);
             pthread_cond_init(&(_instance->m_condSig), NULL);
             try {
@@ -1350,8 +1385,7 @@ namespace WPEFramework
 		    pthread_mutex_unlock(&(_instance->m_lock));
 
 		    success = true;
-		    LOGINFO("getDeviceListWrapper  m_numberOfDevices :%d \n", HdmiCecSourceImplementation::_instance->m_numberOfDevices);
-            numberofdevices = HdmiCecSourceImplementation::_instance->m_numberOfDevices;
+		    LOGINFO("getDeviceListWrapper cached m_numberOfDevices :%d \n", HdmiCecSourceImplementation::_instance->m_numberOfDevices);
 		    try
 		    {
 		    	int i = 0;
@@ -1368,7 +1402,9 @@ namespace WPEFramework
 		    {
 		    	LOGERR("Exception in api");
 		    	success = false;
+			    localDevices.clear();
 		    }
+            numberofdevices = static_cast<uint32_t>(localDevices.size());
             deviceList = (Core::Service<RPC::IteratorType<Exchange::IHdmiCecSource::IHdmiCecSourceDeviceListIterator>>::Create<Exchange::IHdmiCecSource::IHdmiCecSourceDeviceListIterator>(localDevices));
             return Core::ERROR_NONE;
 	    }

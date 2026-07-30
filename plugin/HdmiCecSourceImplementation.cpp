@@ -373,7 +373,19 @@ namespace WPEFramework
                _powerManagerPlugin.Reset();
            }
            _registeredEventHandlers = false;
-           device::Host::getInstance().UnRegister(baseInterface<device::Host::IDisplayDeviceEvents>());
+           //coverity fix: Uncaught exception - wrap UnRegister call in try-catch to prevent exception from escaping destructor
+           try
+           {
+               device::Host::getInstance().UnRegister(baseInterface<device::Host::IDisplayDeviceEvents>());
+           }
+           catch(const std::exception& e)
+           {
+               LOGERR("Exception in UnRegister: %s", e.what());
+           }
+           catch(...)
+           {
+               LOGERR("Unknown exception in UnRegister");
+           }
     }
 
     Core::hresult HdmiCecSourceImplementation::Configure(PluginHost::IShell* service)

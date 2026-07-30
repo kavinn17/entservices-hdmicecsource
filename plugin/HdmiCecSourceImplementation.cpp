@@ -625,6 +625,7 @@ namespace WPEFramework
 
 	    uint32_t HdmiCecSourceImplementation::sendKeyPressEvent(const int logicalAddress, int keyCode)
 		{
+            ScopedFunctionProfiler profile(__FUNCTION__);
 			if(!(_instance->smConnection))
             {
                  return Core::ERROR_GENERAL;
@@ -705,6 +706,7 @@ namespace WPEFramework
 
 		void HdmiCecSourceImplementation::sendKeyReleaseEvent(const int logicalAddress)
 		 {
+            ScopedFunctionProfiler profile(__FUNCTION__);
 	            LOGINFO(" sendKeyReleaseEvent logicalAddress 0x%x \n",logicalAddress);
                     if(!(_instance->smConnection))
                     {
@@ -1008,7 +1010,7 @@ namespace WPEFramework
 
         Core::hresult HdmiCecSourceImplementation::SetOTPEnabled(const bool &enabled, HdmiCecSourceSuccess &success)
         {
-              ScopedFunctionProfiler profile(__FUNCTION__);
+            ScopedFunctionProfiler profile(__FUNCTION__);
            if (cecOTPSettingEnabled != enabled)
            {
                LOGINFO("persist SetOTPEnabled ");
@@ -1021,6 +1023,7 @@ namespace WPEFramework
 
         void HdmiCecSourceImplementation::CECEnable(void)
         {
+            ScopedFunctionProfiler profile(__FUNCTION__);
             LOGINFO("Entered CECEnable");
 
             if (cecEnableStatus)
@@ -1168,6 +1171,7 @@ namespace WPEFramework
 
         void HdmiCecSourceImplementation::CECDisable(void)
         {
+            ScopedFunctionProfiler profile(__FUNCTION__);
             LOGINFO("Entered CECDisable ");
 
             if(!cecEnableStatus)
@@ -1252,6 +1256,7 @@ namespace WPEFramework
 
         void HdmiCecSourceImplementation::getPhysicalAddress()
         {
+            ScopedFunctionProfiler profile(__FUNCTION__);
             LOGINFO("Entered getPhysicalAddress ");
 
             uint32_t physAddress = 0x0F0F0F0F;
@@ -1269,6 +1274,7 @@ namespace WPEFramework
 
         void HdmiCecSourceImplementation::getLogicalAddress()
         {
+            ScopedFunctionProfiler profile(__FUNCTION__);
             LOGINFO("Entered getLogicalAddress ");
 
             try{
@@ -1456,6 +1462,7 @@ namespace WPEFramework
 
 	bool HdmiCecSourceImplementation::pingDeviceUpdateList (int idev)
 	{
+        ScopedFunctionProfiler profile(__FUNCTION__);
 		bool isConnected = false;
 		//self ping is not required
 		if (idev == logicalAddress.toInt()){

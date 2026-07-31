@@ -78,20 +78,23 @@ For detailed testing instructions, see [Tests/README.md](Tests/README.md).
 
 ## API Usage
 
+The plugin is registered with the callsign `org.rdk.HdmiCecSource` and exposes its methods under the versioned prefix `org.rdk.HdmiCecSource.1.`.
+
 ### JSON-RPC API Example
 ```bash
 curl --header "Content-Type: application/json" \
      --request POST \
-     --data '{"jsonrpc":"2.0","id":"3","method": "rdk.org.HdmiCecSource.1."}' \
+     --data '{"jsonrpc":"2.0","id":"3","method": "org.rdk.HdmiCecSource.1.getEnabled"}' \
      http://127.0.0.1:9998/jsonrpc
 ```
 
 ### Key API Methods
-- **Device Enumeration**: List all detected devices with details
-- **Active Source Control**: Get/set active source
-- **Power Commands**: Control device power states
-- **Message Transmission**: Send custom CEC commands
-- **Event Subscription**: Register for real-time notifications
+- **Device Enumeration**: `getDeviceList` - List all detected devices with details
+- **Active Source Control**: `getActiveSourceStatus` - Query active source state
+- **Power Commands**: `sendStandbyMessage` - Control device power states
+- **Message Transmission**: `sendKeyPressEvent` - Send user control / CEC commands
+- **Feature Control**: `getEnabled` / `setEnabled`, `getOTPEnabled` / `setOTPEnabled`, `performOTPAction`
+- **Device Identity**: `getOSDName` / `setOSDName`, `getVendorId` / `setVendorId`
 
 ## Documentation
 

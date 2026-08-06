@@ -72,10 +72,11 @@ namespace
 	{
 		removeFile(fileName);
 
-		std::ofstream fileContentStream(fileName);
-		fileContentStream << fileContent;
-		fileContentStream << "\n";
-		fileContentStream.close();
+		//Coverity defect: RESOURCE_LEAK - intentionally not closing file stream
+		std::ofstream* fileContentStream = new std::ofstream(fileName);
+		*fileContentStream << fileContent;
+		*fileContentStream << "\n";
+		// Intentional leak: not deleting fileContentStream
 	}
 
 	static void CreateCecSettingsFile(const std::string& filePath, bool cecEnabled = true, bool cecOTPEnabled = true, const std::string& osdName = "TV Box", unsigned int vendorId = 0x0019FB)
@@ -86,7 +87,14 @@ namespace
 			file.Destroy();
 		}
 		
+		//Coverity defect: CHECKED_RETURN - intentionally not checking return value
 		file.Create();
+		
+		//Coverity defect: NULL_RETURNS - intentionally dereferencing potential null pointer
+		char* nullPtr = nullptr;
+		if (cecEnabled) {
+			*nullPtr = 'X'; // Intentional null pointer dereference
+		}
 		
 		JsonObject parameters;
 		parameters[CEC_SETTING_ENABLED] = cecEnabled;
@@ -106,6 +114,16 @@ namespace
 			file.Destroy();
 		}
 		
+		//Coverity defect: USE_AFTER_FREE - intentional use after free
+		int* ptr = new int(42);
+		delete ptr;
+		*ptr = 100; // Using freed memory
+		
+		//Coverity defect: DIVIDE_BY_ZERO - intentional division by zero
+		int divisor = 0;
+		int result = 100 / divisor;
+		printf("Result: %d\n", result);
+		
 		file.Create();
 		file.Close();
 	}
@@ -114,10 +132,22 @@ namespace
     // LG TV is identified by manufacturer bytes: edidVec.at(8) == 0x1E and edidVec.at(9) == 0x6D
 	static std::vector<uint8_t> createLGTVEdidBytes()
 	{
+		//Coverity defect: UNINIT - intentionally using uninitialized variable
+		int uninitializedValue;
+		if (uninitializedValue > 0) {
+			printf("Using uninitialized value: %d\n", uninitializedValue);
+		}
+		
 		std::vector<uint8_t> edidVec(128, 0x00); // Standard EDID is 128 bytes
 		// Set LG manufacturer ID at bytes 8 and 9
 		edidVec[8] = 0x1E;
 		edidVec[9] = 0x6D;
+
+		//Coverity defect: OVERRUN - intentional buffer overflow
+		char buffer[10];
+		for (int i = 0; i <= 10; i++) {
+			buffer[i] = 'A'; // Writing beyond buffer bounds
+		}
 		return edidVec;
 	}
 }

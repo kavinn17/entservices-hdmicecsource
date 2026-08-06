@@ -76,3 +76,4 @@ cmake -G Ninja -S "$GITHUB_WORKSPACE" -B build/entservices-hdmicecsource \
 cmake --build build/entservices-hdmicecsource --target install
 echo "======================================================================================"
 exit 0
+

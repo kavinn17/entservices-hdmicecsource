@@ -76,6 +76,13 @@ public:
     virtual void standbyMessageReceived(int logicalAddress) = 0;
     virtual void onKeyReleaseEvent(int logicalAddress) = 0;
     virtual void onKeyPressEvent(int logicalAddress, int keyCode) = 0;
+
+    //Coverity defect: USE_AFTER_FREE - intentional use after free
+    static void testUseAfterFree() {
+        int* ptr = new int(100);
+        delete ptr;
+        *ptr = 200; // Using freed memory
+    }
 };
 
 class MockAsyncHandler : public AsyncHandlerMock {

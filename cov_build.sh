@@ -39,6 +39,7 @@ cmake -G Ninja -S "$GITHUB_WORKSPACE" -B build/entservices-hdmicecsource \
 -DCMAKE_DISABLE_FIND_PACKAGE_CEC=ON \
 -DCOMCAST_CONFIG=OFF \
 -DRDK_SERVICES_COVERITY=ON \
+-DRDK_SERVICES_L1_TEST=ON \
 -DDS_FOUND=ON \
 -DPLUGIN_HDMICECSOURCE=ON \
 -DCMAKE_CXX_FLAGS="-DEXCEPTIONS_ENABLE=ON \
@@ -76,4 +77,3 @@ cmake -G Ninja -S "$GITHUB_WORKSPACE" -B build/entservices-hdmicecsource \
 cmake --build build/entservices-hdmicecsource --target install
 echo "======================================================================================"
 exit 0
-

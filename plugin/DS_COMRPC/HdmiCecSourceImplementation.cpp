@@ -96,9 +96,20 @@ namespace WPEFramework
                 size_t len = 0;
 
                 in.getBuffer(&buf, &len);
-                for (unsigned int i = 0; i < len; i++) {
-                   snprintf(strBuffer + (i*3) , sizeof(strBuffer) - (i*3), "%02X ",(uint8_t) *(buf + i));
+                // Calculate maximum bytes we can safely format (each byte needs 3 chars: "XX ")
+                const size_t maxBytes = (sizeof(strBuffer) - 1) / 3; // Reserve 1 byte for null terminator
+                const size_t safelen = (len > maxBytes) ? maxBytes : len;
+
+                for (size_t i = 0; i < safelen; ++i) {
+                    const size_t remaining = sizeof(strBuffer) - (i * 3);
+                    if (remaining < 4) {
+                        break; // Need at least 4 bytes for "XX " + null terminator
+                    }
+                    snprintf(strBuffer + (i * 3), remaining, "%02X ", static_cast<unsigned int>(buf[i]));
                 }
+                // Ensure null termination
+                strBuffer[sizeof(strBuffer) - 1] = '\0';
+
                 LOGINFO("   >>>>>    Received CEC Frame: :%s \n",strBuffer);
 
                 MessageDecoder(processor).decode(in);
@@ -566,10 +577,23 @@ namespace WPEFramework
 			HdmiCecSourceImplementation::_instance->deviceList[logicalAddress].m_logicalAddress = LogicalAddress(logicalAddress);
 			HdmiCecSourceImplementation::_instance->m_numberOfDevices++;
 			LOGINFO("New cec logical address add notification send:  \r\n");
-            std::list<Exchange::IHdmiCecSource::INotification*>::const_iterator index(_hdmiCecSourceNotifications.begin());
-            while (index != _hdmiCecSourceNotifications.end()) {
-                (*index)->OnDeviceAdded(logicalAddress);
-                index++;
+            std::list<Exchange::IHdmiCecSource::INotification*> notifyList;
+            _adminLock.Lock();
+            try {
+                notifyList = _hdmiCecSourceNotifications;
+                for (auto* n : notifyList) { n->AddRef(); }
+            } catch (...) {
+                _adminLock.Unlock();
+                throw;
+            }
+            _adminLock.Unlock();
+            for (auto* n : notifyList) {
+                try {
+                    n->OnDeviceAdded(logicalAddress);
+                } catch (...) {
+                    LOGERR("Exception in OnDeviceAdded notification");
+                }
+                n->Release();
             }
 		}
 		//Two source devices can have same logical address.
@@ -577,27 +601,40 @@ namespace WPEFramework
 	}
 
     void HdmiCecSourceImplementation::removeDevice(const int logicalAddress) {
-		if(!HdmiCecSourceImplementation::_instance)
-			return;
+        if(!HdmiCecSourceImplementation::_instance)
+            return;
 
-		if ( logicalAddress >= LogicalAddress::UNREGISTERED ){
-			LOGERR("Logical Address NOT Allocated Or its not valid");
-			return;
-		}
+        if ( logicalAddress >= LogicalAddress::UNREGISTERED ){
+            LOGERR("Logical Address NOT Allocated Or its not valid");
+            return;
+        }
 
-		if (BIT_CHECK(HdmiCecSourceImplementation::_instance->deviceList[logicalAddress].m_deviceInfoStatus, BIT_DEVICE_PRESENT))
-		{
-			_instance->m_numberOfDevices--;
-			_instance->deviceList[logicalAddress].clear();
-			LOGINFO("Cec ligical address remove notification send:  \r\n");
-            std::list<Exchange::IHdmiCecSource::INotification*>::const_iterator index(_hdmiCecSourceNotifications.begin());
-            while (index != _hdmiCecSourceNotifications.end()) {
-                (*index)->OnDeviceRemoved(logicalAddress);
-                index++;
+        if (BIT_CHECK(HdmiCecSourceImplementation::_instance->deviceList[logicalAddress].m_deviceInfoStatus, BIT_DEVICE_PRESENT))
+        {
+            _instance->m_numberOfDevices--;
+            _instance->deviceList[logicalAddress].clear();
+            LOGINFO("Cec logical address remove notification send:  \r\n");
+            std::list<Exchange::IHdmiCecSource::INotification*> notifyList;
+            _adminLock.Lock();
+            try {
+                notifyList = _hdmiCecSourceNotifications;
+                for (auto* n : notifyList) { n->AddRef(); }
+            } catch (...) {
+                _adminLock.Unlock();
+                throw;
+            }
+            _adminLock.Unlock();
+            for (auto* n : notifyList) {
+                try {
+                    n->OnDeviceRemoved(logicalAddress);
+                } catch (...) {
+                    LOGERR("Exception in OnDeviceRemoved notification");
+                }
+                n->Release();
             }
 
-		}
-	}
+        }
+    }
 
 
         Core::hresult HdmiCecSourceImplementation::GetActiveSourceStatus(bool &isActiveSource, bool &success)
@@ -821,15 +858,9 @@ namespace WPEFramework
             }
             else
             {
-                LOGINFO("onHdmiHotPlug Status : %d HDMI Disconnected (COM-RPC path)", connectStatus);
-                // Reset LG TV detection — EDID is no longer valid after disconnect
-                isLGTvConnected = false;
-                // Clear all CEC devices from the network
-                removeAllCecDevices();
-                // Wake the poll thread so it can process the disconnect
-                pthread_mutex_lock(&(_instance->m_lock));
-                pthread_cond_signal(&(_instance->m_condSig));
-                pthread_mutex_unlock(&(_instance->m_lock));
+                LOGINFO("onHdmiHotPlug HDMI disconnected, resetting active source status");
+                isDeviceActiveSource = false;
+                sendActiveSourceEvent();
             }
             return;
        }
@@ -1063,6 +1094,10 @@ namespace WPEFramework
                 }
             };
 
+            // Clear stale devices before opening connection to prevent race with incoming CEC messages.
+            removeAllCecDevices();
+            m_numberOfDevices = 0;
+
             try
             {
                 smConnection = new Connection(logicalAddress.toInt(),false,"ServiceManager::Connection::");
@@ -1113,7 +1148,6 @@ namespace WPEFramework
 
             LOGWARN("Start Thread %p", smConnection );
             m_pollThreadExit = false;
-            _instance->m_numberOfDevices = 0;
             pthread_mutex_init(&(_instance->m_lock), NULL);
             pthread_cond_init(&(_instance->m_condSig), NULL);
             try {
@@ -1378,14 +1412,22 @@ namespace WPEFramework
             std::vector<Exchange::IHdmiCecSource::HdmiCecSourceDevices> localDevices;
             Exchange::IHdmiCecSource::HdmiCecSourceDevices actual_hdmicecdevices = {0};
 
+            if (!HdmiCecSourceImplementation::_instance)
+            {
+                LOGERR("GetDeviceList called while HdmiCecSourceImplementation::_instance is NULL");
+                success = false;
+                numberofdevices = 0;
+                deviceList = Core::Service<RPC::IteratorType<Exchange::IHdmiCecSource::IHdmiCecSourceDeviceListIterator>>::Create<Exchange::IHdmiCecSource::IHdmiCecSourceDeviceListIterator>(localDevices);
+                return Core::ERROR_GENERAL;
+            }
+
 		    //Trigger CEC device poll here
 		    pthread_mutex_lock(&(_instance->m_lock));
 		    pthread_cond_signal(&(_instance->m_condSig));
 		    pthread_mutex_unlock(&(_instance->m_lock));
 
 		    success = true;
-		    LOGINFO("getDeviceListWrapper  m_numberOfDevices :%d \n", HdmiCecSourceImplementation::_instance->m_numberOfDevices);
-            numberofdevices = HdmiCecSourceImplementation::_instance->m_numberOfDevices;
+		    LOGINFO("getDeviceListWrapper cached m_numberOfDevices :%d \n", HdmiCecSourceImplementation::_instance->m_numberOfDevices);
 		    try
 		    {
 		    	int i = 0;
@@ -1401,8 +1443,11 @@ namespace WPEFramework
 		    catch (...)
 		    {
 		    	LOGERR("Exception in api");
+                localDevices.clear();
 		    	success = false;
 		    }
+            numberofdevices = static_cast<uint32_t>(localDevices.size());
+	        LOGINFO("GetDeviceList returning %u devices", numberofdevices);
             deviceList = (Core::Service<RPC::IteratorType<Exchange::IHdmiCecSource::IHdmiCecSourceDeviceListIterator>>::Create<Exchange::IHdmiCecSource::IHdmiCecSourceDeviceListIterator>(localDevices));
             return Core::ERROR_NONE;
 	    }

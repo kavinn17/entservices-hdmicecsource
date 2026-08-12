@@ -36,7 +36,7 @@ on:
 
 jobs:
   build-hdmicecsource-foundation:
-    name: Clone and build HDMI CEC Source plugin
+    name: Clone and build HDMI CEC Source plugin test
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/rdkcentral/docker-rdk-ci:latest

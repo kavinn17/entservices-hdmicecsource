@@ -1,0 +1,709 @@
+name: HDMI CEC Source Plugin Foundation Build
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+      - 'sprint/**'
+      - 'release/**'
+      - 'topic/RDK*'
+      - 'test/**'
+  pull_request:
+    branches:
+      - main
+      - develop
+      - 'sprint/**'
+      - 'release/**'
+      - 'topic/RDK*'
+      - 'test/**'
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: "Branch/tag/SHA of entservices-hdmicecsource to build"
+        required: false
+        default: "develop"
+  workflow_call:
+    inputs:
+      source_ref:
+        description: "Branch/tag/SHA of entservices-hdmicecsource to build"
+        required: false
+        type: string
+        default: "develop"
+
+jobs:
+  build-hdmicecsource-foundation:
+    name: Clone and build HDMI CEC Source plugin
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/rdkcentral/docker-rdk-ci:latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      SOURCE_REPO: rdkcentral/entservices-hdmicecsource
+      QEMU_WORKDIR: /tmp/qemu-artifacts
+      SSH_HOST_PORT: '5522'
+      WPEFRAMEWORK_HOST_PORT: '59998'
+      VCOMPONENT_HOST_PORT: '58080'
+      QEMU_GUEST_LIB_DIR: /usr/lib/wpeframework/plugins
+      QEMU_GUEST_RUNTIME_LIB_DIR: /usr/lib
+      GITHUB_IMAGE_ASSET_NAME: DefaultImage.tar.gz
+      DEPLOY_RUNTIME_LIBS: 'false'
+      REQUIRE_NEEDED_MATCH: 'true'
+
+    steps:
+      - name: Clone entservices-hdmicecsource (build branch)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SOURCE_REPO }}
+          ref: ${{ inputs.source_ref || github.ref_name }}
+          path: entservices-hdmicecsource
+
+      - name: Clone qemu branch for latest SuitManager and Profile.sh
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --single-branch --branch qemu \
+            "https://github.com/${SOURCE_REPO}.git" \
+            /tmp/qemu-tests-branch
+          echo "qemu branch Tests/vDeviceTests contents:"
+          ls /tmp/qemu-tests-branch/Tests/vDeviceTests/
+
+      - name: Build dependency stack
+        working-directory: entservices-hdmicecsource
+        run: |
+          bash -x build_dependencies.sh
+
+      - name: Build HDMI CEC Source plugin
+        working-directory: entservices-hdmicecsource
+        run: |
+          bash -x cov_build.sh
+
+      - name: Collect built plugin artifacts
+        id: plugin
+        working-directory: entservices-hdmicecsource
+        run: |
+          set -euo pipefail
+
+          mkdir -p "$QEMU_WORKDIR" artifacts/plugins artifacts/runtime-libs
+          find install -type f -name '*.so' | grep '/plugins/' | tee artifacts/plugins/so-list.txt
+          test -n "$(ls -A artifacts/plugins/so-list.txt 2>/dev/null || true)" || {
+            echo "ERROR: no plugin .so files found under install path" >&2
+            exit 1
+          }
+
+          while IFS= read -r sofile; do
+            cp -f "$sofile" artifacts/plugins/
+          done < artifacts/plugins/so-list.txt
+
+          test -n "$(ls -A artifacts/plugins/*.so 2>/dev/null || true)" || {
+            echo "ERROR: no copied plugin .so artifacts found" >&2
+            exit 1
+          }
+
+          # Collect runtime libraries that plugin may need at load time.
+          # Exclude ALL libWPEFramework* libs — they are already in the QEMU image and
+          # deploying any version from this build causes ABI mismatch SEGV on restart.
+          find install/usr/lib -maxdepth 1 \( -type f -o -type l \) -name '*.so*' \
+            ! -name 'libWPEFramework*' \
+            | grep -v '/plugins/' | tee artifacts/runtime-libs/so-list.txt || true
+          while IFS= read -r sofile; do
+            [[ -n "$sofile" ]] || continue
+            cp -f "$sofile" artifacts/runtime-libs/
+          done < artifacts/runtime-libs/so-list.txt
+
+          {
+            echo "===== built plugin artifacts ====="
+            for sofile in artifacts/plugins/*.so; do
+              echo "--- $(basename "$sofile") ---"
+              ls -lh "$sofile"
+              sha256sum "$sofile"
+              ldd "$sofile" || true
+            done
+
+            echo "===== collected runtime libraries ====="
+            ls -lh artifacts/runtime-libs/ || true
+          } | tee "$QEMU_WORKDIR/plugin-artifact-manifest.txt"
+
+      - name: Install QEMU and SSH tools
+        run: |
+          set -euo pipefail
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            qemu-system-x86 \
+            openssh-client \
+            curl \
+            jq \
+            ca-certificates \
+            netcat-openbsd \
+            git-lfs
+
+          command -v qemu-system-x86_64 >/dev/null
+
+      - name: Download and prepare default QEMU image
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$QEMU_WORKDIR"
+          image_tar="$QEMU_WORKDIR/DefaultImage.tar.gz"
+          extract_dir="$QEMU_WORKDIR/image"
+          image_repo="$SOURCE_REPO"
+          repo_image_tar="$GITHUB_WORKSPACE/entservices-hdmicecsource/Tests/vDeviceTests/qemu-images/DefaultImage.tar.gz"
+          copied_image=false
+
+          if [[ -f "$repo_image_tar" ]]; then
+            cp -f "$repo_image_tar" "$image_tar"
+            copied_image=true
+          fi
+
+          # Fallback 1: clone qemu branch and pull LFS image path.
+          if [[ "$copied_image" != "true" ]]; then
+            fallback_repo_dir="$QEMU_WORKDIR/fallback-repo"
+            rm -rf "$fallback_repo_dir"
+
+            if git clone --depth 1 --single-branch --branch qemu "https://github.com/${image_repo}.git" "$fallback_repo_dir"; then
+              if command -v git-lfs >/dev/null 2>&1; then
+                (
+                  cd "$fallback_repo_dir"
+                  git lfs install --local
+                  git lfs pull --include "Tests/vDeviceTests/qemu-images/DefaultImage.tar.gz" || true
+                )
+              fi
+
+              fallback_image_tar="$fallback_repo_dir/Tests/vDeviceTests/qemu-images/DefaultImage.tar.gz"
+              if [[ -f "$fallback_image_tar" ]]; then
+                cp -f "$fallback_image_tar" "$image_tar"
+                copied_image=true
+              fi
+            fi
+          fi
+
+          # Fallback 2: latest release asset.
+          if [[ "$copied_image" != "true" ]]; then
+            releases_api="https://api.github.com/repos/${image_repo}/releases/latest"
+            release_json="$(curl -sS -fL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "$releases_api")"
+            asset_id="$(echo "$release_json" | jq -r --arg name "$GITHUB_IMAGE_ASSET_NAME" '.assets[] | select(.name == $name) | .id' | head -n 1)"
+
+            [[ -n "$asset_id" && "$asset_id" != "null" ]] || {
+              echo "ERROR: release asset $GITHUB_IMAGE_ASSET_NAME not found in ${image_repo}" >&2
+              echo "Available assets in latest release:" >&2
+              echo "$release_json" | jq -r '.assets[]?.name' | sed 's/^/  - /' >&2
+              exit 1
+            }
+
+            curl -sS -fL \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/octet-stream" \
+              "https://api.github.com/repos/${image_repo}/releases/assets/$asset_id" \
+              -o "$image_tar"
+            copied_image=true
+          else
+            echo "Using repository-local image tar from checkout"
+          fi
+
+          # Detect Git LFS pointer files before extraction.
+          if head -n 1 "$image_tar" | grep -q 'version https://git-lfs.github.com/spec/v1'; then
+            echo "ERROR: $image_tar is a Git LFS pointer, not the real artifact." >&2
+            echo "Ensure LFS objects are available for qemu image path." >&2
+            exit 1
+          fi
+
+          rm -rf "$extract_dir"
+          mkdir -p "$extract_dir"
+          if tar -tzf "$image_tar" >/dev/null 2>&1; then
+            tar -xzf "$image_tar" -C "$extract_dir"
+          else
+            tar -xf "$image_tar" -C "$extract_dir"
+          fi
+
+          kernel_src="$(find "$extract_dir" -type f \( -name 'bzImage*' -o -name 'vmlinuz*' -o -name '*.bin' \) | head -n 1 || true)"
+          rootfs_src="$(find "$extract_dir" -type f \( -name '*.rootfs.ext4' -o -name 'rootfs.ext4' -o -name '*.ext4' \) | head -n 1 || true)"
+
+          [[ -n "$kernel_src" && -f "$kernel_src" ]] || { echo "Kernel image not found" >&2; exit 1; }
+          [[ -n "$rootfs_src" && -f "$rootfs_src" ]] || { echo "Rootfs image not found" >&2; exit 1; }
+
+          cp -f "$kernel_src" "$QEMU_WORKDIR/kernel.bin"
+          cp -f "$rootfs_src" "$QEMU_WORKDIR/rootfs.ext4"
+          chmod 644 "$QEMU_WORKDIR/kernel.bin" "$QEMU_WORKDIR/rootfs.ext4"
+          ls -lh "$QEMU_WORKDIR/kernel.bin" "$QEMU_WORKDIR/rootfs.ext4"
+
+      - name: Boot QEMU
+        run: |
+          set -euo pipefail
+
+          accel_args="-machine q35,accel=tcg -cpu IvyBridge"
+          if [[ -r /dev/kvm ]]; then
+            accel_args="-machine q35,accel=kvm -enable-kvm -cpu host"
+          fi
+
+          qemu-system-x86_64 \
+            $accel_args \
+            -kernel "$QEMU_WORKDIR/kernel.bin" \
+            -append "console=ttyS0 root=/dev/vda rw rootwait rootdelay=10 rootfstype=ext4 init=/sbin/init" \
+            -drive file="$QEMU_WORKDIR/rootfs.ext4",if=virtio,format=raw \
+            -smp 4 \
+            -m 2048 \
+            -display none \
+            -serial file:"$QEMU_WORKDIR/serial.log" \
+            -netdev user,id=network0,hostfwd=tcp:127.0.0.1:${SSH_HOST_PORT}-:22,hostfwd=tcp:127.0.0.1:${WPEFRAMEWORK_HOST_PORT}-127.0.0.1:9998,hostfwd=tcp:127.0.0.1:${VCOMPONENT_HOST_PORT}-127.0.0.1:8080 \
+            -device virtio-net-pci,netdev=network0 \
+            -daemonize \
+            -pidfile "$QEMU_WORKDIR/qemu.pid"
+
+          for attempt in $(seq 1 240); do
+            if nc -z -w2 127.0.0.1 "$SSH_HOST_PORT" 2>/dev/null; then
+              break
+            fi
+            if (( attempt % 30 == 0 )); then
+              tail -n 20 "$QEMU_WORKDIR/serial.log" || true
+            fi
+            sleep 5
+          done
+
+          nc -z -w2 127.0.0.1 "$SSH_HOST_PORT"
+
+      - name: Wait for guest SSH login readiness
+        run: |
+          set -euo pipefail
+
+          ssh_opts=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o LogLevel=ERROR)
+          ssh_key_arg=()
+
+          user_candidates=(root admin)
+          for attempt in $(seq 1 240); do
+            if [[ -f "$QEMU_WORKDIR/qemu.pid" ]] && ! kill -0 "$(cat "$QEMU_WORKDIR/qemu.pid")" 2>/dev/null; then
+              echo "QEMU process exited before SSH became ready" >&2
+              break
+            fi
+
+            if nc -z -w2 127.0.0.1 "$SSH_HOST_PORT" 2>/dev/null; then
+              for ssh_user in "${user_candidates[@]}"; do
+                if ssh "${ssh_key_arg[@]}" "${ssh_opts[@]}" -p "$SSH_HOST_PORT" "$ssh_user@127.0.0.1" 'echo SSH_READY' >/dev/null 2>&1; then
+                  {
+                    echo "QEMU_SSH_PORT=$SSH_HOST_PORT"
+                    echo "QEMU_SSH_USER=$ssh_user"
+                  } > "$QEMU_WORKDIR/ssh-target.env"
+                  echo "SSH ready as user: $ssh_user"
+                  exit 0
+                fi
+              done
+            fi
+
+            if (( attempt % 30 == 0 )); then
+              echo "SSH login attempt $attempt/240" >&2
+              tail -n 30 "$QEMU_WORKDIR/serial.log" 2>/dev/null || true
+            fi
+            sleep 5
+          done
+
+          echo "QEMU guest SSH did not become ready in time" >&2
+          echo "----- last 120 lines of serial.log -----" >&2
+          tail -n 120 "$QEMU_WORKDIR/serial.log" >&2 || true
+          exit 1
+
+      - name: Copy latest plugin .so into booted QEMU image
+        run: |
+          set -euo pipefail
+          trap 'echo "ERROR in copy step at line ${LINENO}: ${BASH_COMMAND}" >&2' ERR
+
+          if [[ -f "$QEMU_WORKDIR/ssh-target.env" ]]; then
+            # shellcheck disable=SC1090
+            source "$QEMU_WORKDIR/ssh-target.env"
+          fi
+
+          selected_ssh_port="${QEMU_SSH_PORT:-$SSH_HOST_PORT}"
+          selected_ssh_user="${QEMU_SSH_USER:-root}"
+          guest_stage_dir="/tmp/hdmicecsource-ci"
+
+          ssh_opts=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o LogLevel=ERROR)
+          ssh_key_arg=()
+
+          ssh "${ssh_key_arg[@]}" "${ssh_opts[@]}" -p "$selected_ssh_port" "$selected_ssh_user@127.0.0.1" \
+            "rm -rf '$guest_stage_dir' && mkdir -p '$guest_stage_dir/plugins' '$guest_stage_dir/runtime'"
+
+          plugin_files=(entservices-hdmicecsource/artifacts/plugins/*.so)
+          if [[ ! -e "${plugin_files[0]}" ]]; then
+            echo "ERROR: No plugin artifacts found at entservices-hdmicecsource/artifacts/plugins/*.so" >&2
+            ls -lah entservices-hdmicecsource/artifacts/plugins/ 2>/dev/null || true
+            exit 1
+          fi
+
+          # Stage plugins in /tmp first; only install to live path after checks pass.
+          for sofile in "${plugin_files[@]}"; do
+            copied=false
+            for try in 1 2 3; do
+              if scp "${ssh_key_arg[@]}" "${ssh_opts[@]}" -P "$selected_ssh_port" "$sofile" "$selected_ssh_user@127.0.0.1:$guest_stage_dir/plugins/"; then
+                copied=true
+                break
+              fi
+              echo "SCP retry $try for $(basename "$sofile")" >&2
+              sleep 3
+            done
+            [[ "$copied" == "true" ]] || { echo "Failed to stage $(basename "$sofile") on guest" >&2; exit 1; }
+          done
+
+          # Validate staged plugins against target image before live replacement.
+          ssh "${ssh_key_arg[@]}" "${ssh_opts[@]}" -p "$selected_ssh_port" "$selected_ssh_user@127.0.0.1" '
+            set -euo pipefail
+            stage_dir="'"$guest_stage_dir"'"
+            plugin_dir="'"$QEMU_GUEST_LIB_DIR"'"
+            require_needed_match="'"$REQUIRE_NEEDED_MATCH"'"
+
+            shopt -s nullglob
+            staged_plugins=("$stage_dir"/plugins/*.so)
+            [[ ${#staged_plugins[@]} -gt 0 ]] || { echo "ERROR: no staged plugins found" >&2; exit 1; }
+
+            for staged in "${staged_plugins[@]}"; do
+              base="$(basename "$staged")"
+              live="$plugin_dir/$base"
+
+              if ldd "$staged" 2>/dev/null | grep -q "not found"; then
+                echo "ERROR: unresolved dependencies for $base" >&2
+                ldd "$staged" >&2 || true
+                exit 1
+              fi
+
+              if [[ -f "$live" ]]; then
+                readelf -d "$staged" 2>/dev/null | awk "/NEEDED/{print \$NF}" | sort > /tmp/new.needed.$base || true
+                readelf -d "$live" 2>/dev/null | awk "/NEEDED/{print \$NF}" | sort > /tmp/live.needed.$base || true
+
+                if ! diff -u /tmp/live.needed.$base /tmp/new.needed.$base >/tmp/needed.diff.$base; then
+                  echo "WARN: NEEDED libs differ for $base" >&2
+                  cat /tmp/needed.diff.$base >&2 || true
+                  if [[ "$require_needed_match" == "true" ]]; then
+                    echo "ERROR: refusing deployment due to NEEDED mismatch for $base" >&2
+                    exit 1
+                  fi
+                fi
+              fi
+            done
+
+            for staged in "${staged_plugins[@]}"; do
+              base="$(basename "$staged")"
+              live="$plugin_dir/$base"
+              if [[ -f "$live" ]]; then
+                cp -f "$live" "${live}.bak"
+                echo "Backed up: $live -> ${live}.bak"
+              fi
+              cp -f "$staged" "$live"
+              chmod 755 "$live" || true
+              echo "Installed: $staged -> $live"
+            done
+
+            command -v ldconfig >/dev/null 2>&1 && ldconfig || true
+          '
+
+          # Copy runtime shared libraries needed by plugin loading (filtered to avoid framework conflicts).
+          runtime_lib_count=0
+          if [[ "${DEPLOY_RUNTIME_LIBS:-false}" == "true" ]]; then
+            for sofile in entservices-hdmicecsource/artifacts/runtime-libs/*.so*; do
+              [[ -f "$sofile" ]] || continue
+              runtime_lib_count=$((runtime_lib_count + 1))
+              copied=false
+              for try in 1 2 3; do
+                if scp "${ssh_key_arg[@]}" "${ssh_opts[@]}" -P "$selected_ssh_port" "$sofile" "$selected_ssh_user@127.0.0.1:$guest_stage_dir/runtime/"; then
+                  copied=true
+                  break
+                fi
+                echo "SCP retry $try for runtime lib $(basename "$sofile")" >&2
+                sleep 3
+              done
+              [[ "$copied" == "true" ]] || { echo "Failed to stage runtime lib $(basename "$sofile") on guest" >&2; exit 1; }
+            done
+
+            if (( runtime_lib_count > 0 )); then
+              ssh "${ssh_key_arg[@]}" "${ssh_opts[@]}" -p "$selected_ssh_port" "$selected_ssh_user@127.0.0.1" '
+                set -euo pipefail
+                stage_dir="'"$guest_stage_dir"'/runtime"
+                runtime_dir="'"$QEMU_GUEST_RUNTIME_LIB_DIR"'"
+                shopt -s nullglob
+                for lib in "$stage_dir"/*.so*; do
+                  base="$(basename "$lib")"
+                  cp -f "$lib" "$runtime_dir/$base"
+                  chmod 755 "$runtime_dir/$base" || true
+                  echo "Installed runtime lib: $runtime_dir/$base"
+                done
+                command -v ldconfig >/dev/null 2>&1 && ldconfig || true
+              '
+            fi
+            echo "Copied $runtime_lib_count plugin-specific runtime libraries to guest"
+          else
+            echo "Skipping runtime library deployment (DEPLOY_RUNTIME_LIBS=false)"
+          fi
+
+          # ---- Step 1: post-deploy activation probe ----
+          echo "===== POST-DEPLOY: checking plugin activation state ====="
+          old_plugin_ok=false
+          ssh "${ssh_key_arg[@]}" "${ssh_opts[@]}" -p "$selected_ssh_port" "$selected_ssh_user@127.0.0.1" '
+            echo "===== Plugin files ====="
+            ls -lh /usr/lib/wpeframework/plugins/*HdmiCec* 2>/dev/null || echo "MISSING old plugin"
+            echo "===== Plugin ldd ====="
+            ldd /usr/lib/wpeframework/plugins/libWPEFrameworkHdmiCecSource.so 2>/dev/null || true
+            echo "===== Plugin readelf NEEDED ====="
+            readelf -d /usr/lib/wpeframework/plugins/libWPEFrameworkHdmiCecSource.so 2>/dev/null | grep NEEDED || true
+            echo "===== Plugin exported symbols ====="
+            nm -D /usr/lib/wpeframework/plugins/libWPEFrameworkHdmiCecSource.so 2>/dev/null | grep -E " T " | grep -iE "rdk|plugin|hdmi|cec" | head -n 20 || true
+            echo "===== Activation attempt ====="
+            curl -sS --connect-timeout 5 --max-time 10 \
+              -H "Content-Type: application/json" \
+              --data "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"Controller.1.activate\",\"params\":{\"callsign\":\"org.rdk.HdmiCecSource\"}}" \
+              http://127.0.0.1:9998/jsonrpc 2>&1 || true
+          ' > "$QEMU_WORKDIR/baseline-old-plugin.log" 2>&1 || true
+          cat "$QEMU_WORKDIR/baseline-old-plugin.log"
+
+          if grep -q 'ERROR_OPENING_FAILED' "$QEMU_WORKDIR/baseline-old-plugin.log" 2>/dev/null; then
+            echo "WARNING: Deployed plugin fails to activate with ERROR_OPENING_FAILED" | tee -a "$QEMU_WORKDIR/baseline-old-plugin.log"
+            old_plugin_ok=false
+          else
+            old_plugin_ok=true
+          fi
+          echo "old_plugin_ok=$old_plugin_ok" >> "$QEMU_WORKDIR/plugin-debug.env"
+
+          # ---- Step 2: preserve rollback backup if missing ----
+          ssh "${ssh_key_arg[@]}" "${ssh_opts[@]}" -p "$selected_ssh_port" "$selected_ssh_user@127.0.0.1" '
+            for pso in /usr/lib/wpeframework/plugins/libWPEFrameworkHdmiCecSource.so \
+                       /usr/lib/wpeframework/plugins/libWPEFrameworkHdmiCecSourceImplementation.so; do
+              if [[ -f "$pso" && ! -f "${pso}.bak" ]]; then
+                cp -f "$pso" "${pso}.bak"
+                echo "Backed up: $pso -> ${pso}.bak"
+              elif [[ -f "${pso}.bak" ]]; then
+                echo "Backup already exists: ${pso}.bak"
+              fi
+            done
+          ' || true
+
+          # ---- Step 3: host-side comparison: new vs old local build ----
+          echo "===== HOST: new plugin binary info ====="
+          for sofile in entservices-hdmicecsource/artifacts/plugins/*.so; do
+            [[ -f "$sofile" ]] || continue
+            fname="$(basename "$sofile")"
+            echo "--- $fname ---"
+            file "$sofile"
+            ldd "$sofile" 2>/dev/null || echo "ldd not available on host or cross-compiled"
+            readelf -d "$sofile" 2>/dev/null | grep NEEDED || true
+            nm -D "$sofile" 2>/dev/null | grep -E " T " | grep -iE "rdk|plugin|hdmi|cec" | head -n 20 || true
+          done | tee "$QEMU_WORKDIR/new-plugin-host-info.log"
+
+          # ---- Step 4: refresh linker cache and compare on guest ----
+          ssh "${ssh_key_arg[@]}" "${ssh_opts[@]}" -p "$selected_ssh_port" "$selected_ssh_user@127.0.0.1" '
+            command -v ldconfig >/dev/null 2>&1 && ldconfig || true
+
+            echo "===== NEW plugin files after copy ====="
+            ls -lh /usr/lib/wpeframework/plugins/*HdmiCec* 2>/dev/null || true
+            echo "===== required runtime libs ====="
+            ls -lh /usr/lib/libWPEFrameworkPlugins.so* 2>/dev/null || echo "MISSING: /usr/lib/libWPEFrameworkPlugins.so*"
+            echo "===== NEW plugin ldd ====="
+            ldd /usr/lib/wpeframework/plugins/libWPEFrameworkHdmiCecSource.so 2>/dev/null || true
+            ldd /usr/lib/wpeframework/plugins/libWPEFrameworkHdmiCecSourceImplementation.so 2>/dev/null || true
+            echo "===== NEW plugin readelf NEEDED ====="
+            readelf -d /usr/lib/wpeframework/plugins/libWPEFrameworkHdmiCecSource.so 2>/dev/null | grep NEEDED || true
+            echo "===== MISSING SYMBOLS (undefined) ====="
+            nm -D /usr/lib/wpeframework/plugins/libWPEFrameworkHdmiCecSource.so 2>/dev/null | grep " U " | head -n 40 || true
+            echo "===== WPEFramework version ====="
+            WPEFramework --version 2>/dev/null || dpkg -l | grep -i wpe 2>/dev/null | head -n 5 || true
+          ' > "$QEMU_WORKDIR/postcopy-plugin-compare.log" 2>&1 || true
+          cat "$QEMU_WORKDIR/postcopy-plugin-compare.log"
+
+          # ---- Step 5: test new plugin activation, fallback to old if it fails ----
+          ssh "${ssh_key_arg[@]}" "${ssh_opts[@]}" -p "$selected_ssh_port" "$selected_ssh_user@127.0.0.1" 'sync; systemctl restart WPEFramework || systemctl restart wpeframework || true' || true
+          sleep 8
+
+          activate_result="$(ssh "${ssh_key_arg[@]}" "${ssh_opts[@]}" -p "$selected_ssh_port" "$selected_ssh_user@127.0.0.1" \
+            'curl -sS --connect-timeout 5 --max-time 10 -H "Content-Type: application/json" \
+             --data "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"Controller.1.activate\",\"params\":{\"callsign\":\"org.rdk.HdmiCecSource\"}}" \
+             http://127.0.0.1:9998/jsonrpc 2>&1 || true')"
+
+          echo "New plugin activation probe: $activate_result"
+
+          if echo "$activate_result" | grep -q 'ERROR_OPENING_FAILED'; then
+            echo "NOTICE: New plugin has unresolved dependencies in this image — reverting to old plugin for test run" | tee "$QEMU_WORKDIR/plugin-fallback.log"
+            ssh "${ssh_key_arg[@]}" "${ssh_opts[@]}" -p "$selected_ssh_port" "$selected_ssh_user@127.0.0.1" '
+              for pso in /usr/lib/wpeframework/plugins/libWPEFrameworkHdmiCecSource.so \
+                         /usr/lib/wpeframework/plugins/libWPEFrameworkHdmiCecSourceImplementation.so; do
+                if [[ -f "${pso}.bak" ]]; then
+                  cp -f "${pso}.bak" "$pso"
+                  echo "Restored: ${pso}.bak -> $pso"
+                fi
+              done
+              command -v ldconfig >/dev/null 2>&1 && ldconfig || true
+              sync
+              systemctl restart WPEFramework || systemctl restart wpeframework || true
+            ' || true
+            sleep 6
+            echo "FALLBACK_TO_OLD=true" >> "$QEMU_WORKDIR/plugin-debug.env"
+          else
+            echo "New plugin activated successfully" | tee -a "$QEMU_WORKDIR/plugin-debug.env"
+            echo "FALLBACK_TO_OLD=false" >> "$QEMU_WORKDIR/plugin-debug.env"
+          fi
+
+          ssh "${ssh_key_arg[@]}" "${ssh_opts[@]}" -p "$selected_ssh_port" "$selected_ssh_user@127.0.0.1" "rm -rf '$guest_stage_dir'" || true
+
+      - name: Capture WPEFramework pre-test diagnostics
+        if: always()
+        run: |
+          set -euo pipefail
+
+          if [[ -f "$QEMU_WORKDIR/ssh-target.env" ]]; then
+            # shellcheck disable=SC1090
+            source "$QEMU_WORKDIR/ssh-target.env"
+          fi
+          selected_ssh_port="${QEMU_SSH_PORT:-$SSH_HOST_PORT}"
+          selected_ssh_user="${QEMU_SSH_USER:-root}"
+          ssh_opts=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o LogLevel=ERROR)
+          ssh_key_arg=()
+
+          ssh "${ssh_key_arg[@]}" "${ssh_opts[@]}" -p "$selected_ssh_port" "$selected_ssh_user@127.0.0.1" '
+            echo "===== uname ====="
+            uname -a || true
+            echo "===== WPEFramework service status ====="
+            systemctl is-active WPEFramework wpeframework 2>/dev/null || true
+            systemctl status WPEFramework wpeframework --no-pager 2>/dev/null | head -n 40 || true
+            echo "===== listening ports ====="
+            ss -ltnp 2>/dev/null | grep -E ":9998|:8080" || netstat -ltnp 2>/dev/null | grep -E ":9998|:8080" || true
+            echo "===== recent WPEFramework journal ====="
+            journalctl -u WPEFramework -u wpeframework -n 80 --no-pager 2>/dev/null || true
+            echo "===== HdmiCecSource plugin files ====="
+            ls -lh /usr/lib/wpeframework/plugins/*HdmiCec* 2>/dev/null || echo "MISSING: no HdmiCec plugins found"
+            echo "===== JSON-RPC probe ====="
+            curl -sS --connect-timeout 3 --max-time 8 \
+              -H "Content-Type: application/json" \
+              --data "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"Controller.1.status\"}" \
+              http://127.0.0.1:9998/jsonrpc || true
+          ' > "$QEMU_WORKDIR/pretest-wpeframework.log" 2>&1 || true
+          echo "Pre-test diagnostics saved to $QEMU_WORKDIR/pretest-wpeframework.log"
+          cat "$QEMU_WORKDIR/pretest-wpeframework.log"
+
+      - name: Validate HDMI CEC vDevice testcases
+        run: |
+          set -euo pipefail
+
+          if [[ -f "$QEMU_WORKDIR/ssh-target.env" ]]; then
+            # shellcheck disable=SC1090
+            source "$QEMU_WORKDIR/ssh-target.env"
+          fi
+          selected_ssh_port="${QEMU_SSH_PORT:-$SSH_HOST_PORT}"
+          selected_ssh_user="${QEMU_SSH_USER:-root}"
+          ssh_opts=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o LogLevel=ERROR)
+          ssh_key_arg=()
+
+          # Use the latest qemu-branch vDeviceTests
+          tests_dir=/tmp/qemu-tests-branch/Tests/vDeviceTests
+
+          # Set RDK profile on guest and restart WPEFramework so Profile.sh in SuitManager
+          # sees the profile already set and skips triggering its own restart window.
+          ssh "${ssh_key_arg[@]}" "${ssh_opts[@]}" -p "$selected_ssh_port" "$selected_ssh_user@127.0.0.1" '
+            set -eu
+            if [[ -f /etc/device.properties ]]; then
+              if grep -q "^RDK_PROFILE=" /etc/device.properties; then
+                sed -i "s/^RDK_PROFILE=.*/RDK_PROFILE=STB/" /etc/device.properties
+              else
+                printf "\nRDK_PROFILE=STB\n" >> /etc/device.properties
+              fi
+            else
+              printf "RDK_PROFILE=STB\n" > /etc/device.properties
+            fi
+            echo "guest RDK_PROFILE: $(grep ^RDK_PROFILE= /etc/device.properties || true)"
+            # Restart WPEFramework now so it starts with the correct profile already applied.
+            systemctl restart WPEFramework 2>/dev/null || systemctl restart wpeframework 2>/dev/null || true
+          '
+
+          # Wait for WPEFramework HTTP service to respond on guest before establishing tunnel.
+          # Using curl is more reliable than nc on minimal guest images.
+          echo "Waiting for WPEFramework HTTP service on guest (127.0.0.1:9998/Service)..."
+          guest_jsonrpc_ready=false
+          for attempt in $(seq 1 60); do
+            if ssh "${ssh_key_arg[@]}" "${ssh_opts[@]}" -p "$selected_ssh_port" "$selected_ssh_user@127.0.0.1" \
+              'curl -sf --connect-timeout 3 --max-time 6 http://127.0.0.1:9998/Service >/dev/null 2>&1'; then
+              echo "WPEFramework HTTP service is up (attempt $attempt)"
+              guest_jsonrpc_ready=true
+              break
+            fi
+            if (( attempt == 60 )); then
+              echo "ERROR: WPEFramework HTTP service not ready on guest within 5 minutes" >&2
+              ssh "${ssh_key_arg[@]}" "${ssh_opts[@]}" -p "$selected_ssh_port" "$selected_ssh_user@127.0.0.1" \
+                'systemctl status WPEFramework wpeframework --no-pager 2>/dev/null | head -n 60 || true; journalctl -u WPEFramework -u wpeframework -n 60 --no-pager 2>/dev/null || true' >&2 || true
+              exit 1
+            fi
+            sleep 5
+          done
+          [[ "$guest_jsonrpc_ready" == "true" ]]
+
+          # Set up SSH tunnel for JSON-RPC and vComponent ports
+          JSONRPC_TUNNEL_PORT=59999
+          VCOMPONENT_TUNNEL_PORT=58081
+          ssh "${ssh_key_arg[@]}" "${ssh_opts[@]}" \
+            -o ExitOnForwardFailure=yes -fN \
+            -L "127.0.0.1:${JSONRPC_TUNNEL_PORT}:127.0.0.1:9998" \
+            -L "127.0.0.1:${VCOMPONENT_TUNNEL_PORT}:127.0.0.1:8080" \
+            -p "$selected_ssh_port" "$selected_ssh_user@127.0.0.1"
+
+          tunnel_pid="$(pgrep -f "127.0.0.1:${JSONRPC_TUNNEL_PORT}:127.0.0.1:9998" | head -n 1 || true)"
+          cleanup_tunnel() { [[ -n "${tunnel_pid:-}" ]] && kill "$tunnel_pid" 2>/dev/null || true; }
+          trap cleanup_tunnel EXIT
+
+          nc -z -w3 127.0.0.1 "$JSONRPC_TUNNEL_PORT"
+          nc -z -w3 127.0.0.1 "$VCOMPONENT_TUNNEL_PORT"
+
+          # Confirm JSON-RPC actually responds (not just port open) before handing to SuitManager.
+          echo "Confirming JSON-RPC HTTP response at http://127.0.0.1:${JSONRPC_TUNNEL_PORT}/jsonrpc ..."
+          jsonrpc_ready=false
+          for attempt in $(seq 1 30); do
+            if curl -sf --connect-timeout 3 --max-time 6 \
+              -H "Content-Type: application/json" \
+              --data '{"jsonrpc":"2.0","id":1,"method":"Controller.1.status"}' \
+              "http://127.0.0.1:${JSONRPC_TUNNEL_PORT}/jsonrpc" >/dev/null 2>&1; then
+              echo "JSON-RPC ready at attempt $attempt"
+              jsonrpc_ready=true
+              break
+            fi
+            echo "JSON-RPC not yet responding, attempt $attempt/30 ..."
+            sleep 3
+          done
+          if [[ "$jsonrpc_ready" != "true" ]]; then
+            echo "ERROR: WPEFramework JSON-RPC not responding after 90s" >&2
+            exit 1
+          fi
+
+          # Explicitly activate HdmiCecSource before running SuitManager.
+          activate_result="$(curl -sS --connect-timeout 5 --max-time 10 \
+            -H "Content-Type: application/json" \
+            --data '{"jsonrpc":"2.0","id":1,"method":"Controller.1.activate","params":{"callsign":"org.rdk.HdmiCecSource"}}' \
+            "http://127.0.0.1:${JSONRPC_TUNNEL_PORT}/jsonrpc" 2>&1 || true)"
+          echo "Activation result (tunnel): $activate_result"
+          if echo "$activate_result" | grep -q 'ERROR_'; then
+            echo "ERROR: org.rdk.HdmiCecSource activation failed before tests" >&2
+            exit 1
+          fi
+
+          export TARGET_HOST=127.0.0.1
+          export JSONRPC_PORT="$JSONRPC_TUNNEL_PORT"
+          export VCOMPONENT_PORT="$VCOMPONENT_TUNNEL_PORT"
+          export WPEFRAMEWORK_JSONRPC_URL="http://127.0.0.1:${JSONRPC_TUNNEL_PORT}/jsonrpc"
+          export HDMICEC_AUTO_COVERAGE=0
+
+          cd "$tests_dir"
+          python3 SuitManager.py | tee "$QEMU_WORKDIR/vdevice-tests.log"
+
+      - name: Upload QEMU logs and plugin artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qemu-hdmicecsource-build-and-tests-${{ github.run_id }}
+          path: |
+            entservices-hdmicecsource/artifacts/plugins/**
+            /tmp/qemu-artifacts/*.log
+            /tmp/qemu-artifacts/*.txt
+            /tmp/qemu-artifacts/*.pid
+            /tmp/qemu-artifacts/serial.log
+          if-no-files-found: warn
+
+      - name: Shutdown QEMU
+        if: always()
+        run: |
+          if [[ -f "$QEMU_WORKDIR/qemu.pid" ]]; then
+            kill "$(cat "$QEMU_WORKDIR/qemu.pid")" 2>/dev/null || true
+          fi

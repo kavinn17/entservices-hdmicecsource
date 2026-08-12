@@ -52,7 +52,7 @@ jobs:
       QEMU_GUEST_LIB_DIR: /usr/lib/wpeframework/plugins
       QEMU_GUEST_RUNTIME_LIB_DIR: /usr/lib
       GITHUB_IMAGE_ASSET_NAME: DefaultImage.tar.gz
-      DEPLOY_RUNTIME_LIBS: 'false'
+      DEPLOY_RUNTIME_LIBS: 'true'
       REQUIRE_NEEDED_MATCH: 'true'
 
     steps:
@@ -80,6 +80,9 @@ jobs:
       - name: Build HDMI CEC Source plugin
         working-directory: entservices-hdmicecsource
         run: |
+          export CFLAGS="${CFLAGS:-} --coverage"
+          export CXXFLAGS="${CXXFLAGS:-} --coverage"
+          export LDFLAGS="${LDFLAGS:-} --coverage"
           bash -x cov_build.sh
 
       - name: Collect built plugin artifacts
@@ -128,6 +131,9 @@ jobs:
             ls -lh artifacts/runtime-libs/ || true
           } | tee "$QEMU_WORKDIR/plugin-artifact-manifest.txt"
 
+          mkdir -p artifacts/coverage
+          find . -type f -name "*.gcno" \-exec cp --parents {} artifacts/coverage/ \; \2>/dev/null || true
+
       - name: Install QEMU and SSH tools
         run: |
           set -euo pipefail
@@ -142,6 +148,14 @@ jobs:
             git-lfs
 
           command -v qemu-system-x86_64 >/dev/null
+
+      - name: Install Coverage Tools
+        run: |
+          set -euo pipefail
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            lcov \
+            gcovr
 
       - name: Download and prepare default QEMU image
         env:
@@ -323,7 +337,7 @@ jobs:
           ssh_key_arg=()
 
           ssh "${ssh_key_arg[@]}" "${ssh_opts[@]}" -p "$selected_ssh_port" "$selected_ssh_user@127.0.0.1" \
-            "rm -rf '$guest_stage_dir' && mkdir -p '$guest_stage_dir/plugins' '$guest_stage_dir/runtime'"
+            "rm -rf '$guest_stage_dir' && mkdir -p '$guest_stage_dir/plugins' '$guest_stage_dir/runtime' '$guest_stage_dir/gcno'"
 
           plugin_files=(entservices-hdmicecsource/artifacts/plugins/*.so)
           if [[ ! -e "${plugin_files[0]}" ]]; then
@@ -345,6 +359,34 @@ jobs:
             done
             [[ "$copied" == "true" ]] || { echo "Failed to stage $(basename "$sofile") on guest" >&2; exit 1; }
           done
+
+          # Copy gcno files
+          echo "Copying gcno files to QEMU"
+          gcno_count=0
+
+          while IFS= read -r gcno_file; do
+            [[ -f "$gcno_file" ]] || continue
+            gcno_count=$((gcno_count + 1))
+            copied=false
+            for try in 1 2 3; do
+              if scp "${ssh_key_arg[@]}" "${ssh_opts[@]}" \
+                 -P "$selected_ssh_port" \
+                 "$gcno_file" \
+                 "$selected_ssh_user@127.0.0.1:$guest_stage_dir/gcno/"; then
+                 copied=true
+                 break
+              fi
+
+            echo "SCP retry $try for $(basename "$gcno_file")" >&2
+            sleep 3
+          done
+
+          [[ "$copied" == "true" ]] || {
+            echo "Failed to copy $(basename "$gcno_file")" >&2
+            exit 1
+           }
+          done < <(find entservices-hdmicecsource -type f -name "*.gcno")
+          echo "Copied $gcno_count gcno files"
 
           # Validate staged plugins against target image before live replacement.
           ssh "${ssh_key_arg[@]}" "${ssh_opts[@]}" -p "$selected_ssh_port" "$selected_ssh_user@127.0.0.1" '
@@ -395,6 +437,22 @@ jobs:
             done
 
             command -v ldconfig >/dev/null 2>&1 && ldconfig || true
+          '
+          # Install gcno files
+          ssh "${ssh_key_arg[@]}" "${ssh_opts[@]}" \
+            -p "$selected_ssh_port" \
+            "$selected_ssh_user@127.0.0.1" '
+            set -euo pipefail
+
+            gcno_stage_dir="'"$guest_stage_dir"'/gcno"
+            gcno_target_dir="/tmp/coverage_gcno"
+            mkdir -p "$gcno_target_dir"
+            shopt -s nullglob
+            for gcno in "$gcno_stage_dir"/*.gcno; do
+                cp -f "$gcno" "$gcno_target_dir/"
+                chmod 644 "$gcno_target_dir/$(basename "$gcno")" || true
+                echo "Installed gcno: $(basename "$gcno")"
+            done
           '
 
           # Copy runtime shared libraries needed by plugin loading (filtered to avoid framework conflicts).
@@ -688,6 +746,44 @@ jobs:
           cd "$tests_dir"
           python3 SuitManager.py | tee "$QEMU_WORKDIR/vdevice-tests.log"
 
+      - name: Collect GCDA Files From Guest
+        if: always()
+        run: |
+          set -euo pipefail
+          source "$QEMU_WORKDIR/ssh-target.env"
+          ssh_opts=(-o StrictHostKeyChecking=no \-o UserKnownHostsFile=/dev/null \-o ConnectTimeout=10)ssh "${ssh_opts[@]}" \-p "$QEMU_SSH_PORT" \"$QEMU_SSH_USER@127.0.0.1" '
+             mkdir -p /tmp/coverage-export
+             find / -name "*.gcda" \-exec cp --parents {} /tmp/coverage-export \; \2>/dev/null || true
+             tar -czf /tmp/hdmicec-coverage.tar.gz \-C /tmp coverage-export'
+          scp "${ssh_opts[@]}" \-P "$QEMU_SSH_PORT" \"$QEMU_SSH_USER@127.0.0.1:/tmp/hdmicec-coverage.tar.gz" \"$QEMU_WORKDIR/"
+  
+      - name: Extract Coverage Data
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p coverage
+          tar -xzf \"$QEMU_WORKDIR/hdmicec-coverage.tar.gz" \-C coverage
+      - name: Generate Coverage Report
+        if: always()
+        run: |
+          set -euo pipefail
+          lcov \
+             --capture \
+             --directory entservices-hdmicecsource \
+             --output-file coverage.info
+          lcov \
+             --remove coverage.info \
+             '/usr/*' \
+             '*/Tests/*' \
+             '*/build/*' \
+             --output-file coverage_filtered.info
+          genhtml \
+             coverage_filtered.info \
+             --output-directory coverage_html
+          gcovr \
+             --root entservices-hdmicecsource \
+             --html-details \
+             --html coverage_html/gcovr.html
       - name: Upload QEMU logs and plugin artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -699,6 +795,9 @@ jobs:
             /tmp/qemu-artifacts/*.txt
             /tmp/qemu-artifacts/*.pid
             /tmp/qemu-artifacts/serial.log
+            coverage.info
+            coverage_filtered.info
+            coverage_html/**
           if-no-files-found: warn
 
       - name: Shutdown QEMU

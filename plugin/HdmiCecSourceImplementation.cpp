@@ -1332,6 +1332,14 @@ namespace WPEFramework
         {   //sample servicemanager response:
             std::vector<Exchange::IHdmiCecSource::HdmiCecSourceDevices> localDevices;
             Exchange::IHdmiCecSource::HdmiCecSourceDevices actual_hdmicecdevices = {0};
+	    if (!HdmiCecSourceImplementation::_instance)
+	    {
+                LOGERR("GetDeviceList called while HdmiCecSourceImplementation::_instance is NULL");
+                success = false;
+                numberofdevices = 0;
+                deviceList = Core::Service<RPC::IteratorType<Exchange::IHdmiCecSource::IHdmiCecSourceDeviceListIterator>>::Create<Exchange::IHdmiCecSource::IHdmiCecSourceDeviceListIterator>(localDevices);
+                return Core::ERROR_GENERAL;
+            }
 
 		    //Trigger CEC device poll here
 		    pthread_mutex_lock(&(_instance->m_lock));

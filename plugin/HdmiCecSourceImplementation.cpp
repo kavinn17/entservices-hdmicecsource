@@ -362,7 +362,18 @@ namespace WPEFramework
 
          if(cecEnableStatus)
          {
-            setEnabledInternal(false, false);
+             try
+             {
+                 setEnabledInternal(false, false);
+             }
+             catch(const std::exception& e)
+             {
+                 LOGERR("Exception in setEnabledInternal during destructor: %s", e.what());
+             }
+             catch(...)
+             {
+                 LOGERR("Unknown exception in setEnabledInternal during destructor");
+             }
          }
 
          HdmiCecSourceImplementation::_instance = nullptr;

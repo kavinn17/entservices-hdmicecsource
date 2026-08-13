@@ -505,6 +505,67 @@ jobs:
             echo "Skipping runtime library deployment (DEPLOY_RUNTIME_LIBS=false)"
           fi
 
+          # ---- Ensure versioned WPEFramework SONAMEs required by the plugin exist on guest ----
+          # The coverage build links against versioned sonames (e.g. libWPEFrameworkPlugins.so.1)
+          # that may be absent from the image (only a differently-versioned/unversioned file is
+          # present). The guest is BusyBox with no readelf, so derive the NEEDED sonames on the
+          # host and symlink each missing one to the matching library the image actually ships.
+          soname_file="$QEMU_WORKDIR/plugin-wpe-sonames.txt"
+          : > "$soname_file"
+          for so in entservices-hdmicecsource/artifacts/plugins/*.so; do
+            [[ -f "$so" ]] || continue
+            readelf -d "$so" 2>/dev/null | awk '/NEEDED/{gsub(/[][]/,""); print $NF}'
+          done | sort -u | grep -E '^libWPEFramework' > "$soname_file" || true
+          echo "===== WPEFramework sonames required by plugin ====="
+          cat "$soname_file" || true
+
+          if [[ -s "$soname_file" ]]; then
+            scp "${ssh_key_arg[@]}" "${ssh_opts[@]}" -P "$selected_ssh_port" \
+              "$soname_file" "$selected_ssh_user@127.0.0.1:$guest_stage_dir/plugin-wpe-sonames.txt" || true
+
+            ssh "${ssh_key_arg[@]}" "${ssh_opts[@]}" -p "$selected_ssh_port" "$selected_ssh_user@127.0.0.1" '
+              set -u
+              list="'"$guest_stage_dir"'/plugin-wpe-sonames.txt"
+              [ -f "$list" ] || exit 0
+              echo "===== Resolving required WPEFramework sonames on guest ====="
+              while IFS= read -r need; do
+                [ -n "$need" ] || continue
+                if [ -e "/usr/lib/$need" ]; then
+                  echo "OK: /usr/lib/$need already present"
+                  continue
+                fi
+                base="$(echo "$need" | sed "s/\.so.*/.so/")"
+                cand="$(ls -1 /usr/lib/${base}* 2>/dev/null | head -n1)"
+                [ -z "$cand" ] && cand="$(find /usr/lib /usr/lib/wpeframework -maxdepth 2 -name "${base}*" 2>/dev/null | head -n1)"
+                if [ -n "$cand" ]; then
+                  ln -sf "$cand" "/usr/lib/$need"
+                  echo "Symlinked /usr/lib/$need -> $cand"
+                else
+                  echo "WARN: no candidate on guest to satisfy $need"
+                fi
+              done < "$list"
+              command -v ldconfig >/dev/null 2>&1 && ldconfig || true
+            ' || true
+          fi
+
+          # ---- Set RDK_PROFILE before activation probes ----
+          # HdmiCecSource.Initialize() rejects profiles other than STB.
+          ssh "${ssh_key_arg[@]}" "${ssh_opts[@]}" -p "$selected_ssh_port" "$selected_ssh_user@127.0.0.1" '
+            set -eu
+            if [ -f /etc/device.properties ]; then
+              if grep -q "^RDK_PROFILE=" /etc/device.properties; then
+                sed -i "s/^RDK_PROFILE=.*/RDK_PROFILE=STB/" /etc/device.properties
+              else
+                printf "\nRDK_PROFILE=STB\n" >> /etc/device.properties
+              fi
+            else
+              printf "RDK_PROFILE=STB\n" > /etc/device.properties
+            fi
+            echo "guest RDK_PROFILE: $(grep ^RDK_PROFILE= /etc/device.properties || true)"
+            systemctl restart WPEFramework 2>/dev/null || systemctl restart wpeframework 2>/dev/null || true
+          '
+          sleep 8
+
           # ---- Step 1: post-deploy activation probe ----
           echo "===== POST-DEPLOY: checking plugin activation state ====="
           old_plugin_ok=false

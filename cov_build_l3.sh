@@ -31,6 +31,11 @@ echo "==========================================================================
 echo "Building entservices-hdmicecsource with coverage flags (L3/vDeviceTests)"
 
 cd "${GITHUB_WORKSPACE}"
+
+# Use C++17 so static constexpr members are implicitly inline — avoids undefined
+# symbol errors when the QEMU image ships an older WPEFramework runtime.
+sed -i 's/CXX_STANDARD 11/CXX_STANDARD 17/g' plugin/CMakeLists.txt
+
 cmake -G Ninja -S "${GITHUB_WORKSPACE}" -B build/entservices-hdmicecsource \
   -DUSE_THUNDER_R4=ON \
   -DCMAKE_INSTALL_PREFIX="${GITHUB_WORKSPACE}/install/usr" \

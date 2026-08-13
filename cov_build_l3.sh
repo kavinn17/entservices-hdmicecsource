@@ -32,59 +32,61 @@ echo "Building entservices-hdmicecsource with coverage flags (L3/vDeviceTests)"
 
 cd "${GITHUB_WORKSPACE}"
 
-# Use C++17 so static constexpr members are implicitly inline — avoids undefined
-# symbol errors when the QEMU image ships an older WPEFramework runtime.
+# C++17 ensures static constexpr members are implicitly inline, avoiding
+# undefined symbol errors if the QEMU image ships a different Thunder ABI.
 sed -i 's/CXX_STANDARD 11/CXX_STANDARD 17/g' plugin/CMakeLists.txt
+
+# Verify real headers were installed by build_dependencies.sh
+echo "--- Installed header verification ---"
+for h in rdk/ds/manager.hpp rdk/halif/ds-hal/dsTypes.h rdk/iarmbus/libIARM.h \
+         ccec/include/ccec/Connection.hpp osal/include/osal/Mutex.hpp \
+         telemetry_busmessage_sender.h; do
+    if [ -f "${GITHUB_WORKSPACE}/install/usr/include/${h}" ]; then
+        echo "  OK   ${h}"
+    else
+        echo "  MISS ${h}" >&2
+    fi
+done
+echo "---"
+
+# Pre-seed all find_path/find_library cache variables so the Find modules
+# don't rely on auto-discovery. Set optional dirs (DSRPC, IARMRECEIVER) to
+# a valid path so their NOTFOUND values don't poison include dirs lists.
+INCPFX="${GITHUB_WORKSPACE}/install/usr/include"
+LIBPFX="${GITHUB_WORKSPACE}/install/usr/lib/build-stubs"
 
 cmake -G Ninja -S "${GITHUB_WORKSPACE}" -B build/entservices-hdmicecsource \
   -DUSE_THUNDER_R4=ON \
   -DCMAKE_INSTALL_PREFIX="${GITHUB_WORKSPACE}/install/usr" \
   -DCMAKE_MODULE_PATH="${GITHUB_WORKSPACE}/install/tools/cmake" \
+  -DCMAKE_PREFIX_PATH="${GITHUB_WORKSPACE}/install/usr" \
   -DCMAKE_VERBOSE_MAKEFILE=ON \
-  -DCMAKE_DISABLE_FIND_PACKAGE_IARMBus=ON \
   -DCMAKE_DISABLE_FIND_PACKAGE_RFC=ON \
-  -DCMAKE_DISABLE_FIND_PACKAGE_DS=ON \
-  -DCMAKE_DISABLE_FIND_PACKAGE_CEC=ON \
   -DCOMCAST_CONFIG=OFF \
   -DRDK_SERVICES_COVERITY=ON \
-  -DDS_FOUND=ON \
   -DPLUGIN_HDMICECSOURCE=ON \
+  -DDS_INCLUDE_DIRS:PATH="${INCPFX}/rdk/ds" \
+  -DDSHAL_INCLUDE_DIRS:PATH="${INCPFX}/rdk/halif/ds-hal" \
+  -DDSRPC_INCLUDE_DIRS:PATH="${INCPFX}" \
+  -DDS_LIBRARIES:FILEPATH="${LIBPFX}/libds.so" \
+  -DDSHAL_LIBRARIES:FILEPATH="${LIBPFX}/libdshalcli.so" \
+  -DIARMBUS_INCLUDE_DIRS:PATH="${INCPFX}/rdk/iarmbus" \
+  -DIARMRECEIVER_INCLUDE_DIRS:PATH="${INCPFX}" \
+  -DIARMBUS_LIBRARIES:FILEPATH="${LIBPFX}/libIARMBus.so" \
+  -DCEC_INCLUDE_DIRS:PATH="${INCPFX}/ccec/include" \
+  -DOSAL_INCLUDE_DIRS:PATH="${INCPFX}/osal/include" \
+  -DCEC_LIBRARIES:FILEPATH="${LIBPFX}/libRCEC.so" \
+  -DCEC_HAL_LIBRARIES:STRING= \
+  -DOSAL_LIBRARIES:FILEPATH="${LIBPFX}/libRCECOSHal.so" \
   -DCMAKE_C_FLAGS="--coverage" \
   -DCMAKE_SHARED_LINKER_FLAGS="--coverage" \
   -DCMAKE_CXX_FLAGS="-DEXCEPTIONS_ENABLE=ON \
   --coverage \
-  -I ${GITHUB_WORKSPACE}/entservices-testframework/Tests/headers \
-  -I ${GITHUB_WORKSPACE}/entservices-testframework/Tests/headers/audiocapturemgr \
-  -I ${GITHUB_WORKSPACE}/entservices-testframework/Tests/headers/rdk/ds \
-  -I ${GITHUB_WORKSPACE}/entservices-testframework/Tests/headers/rdk/iarmbus \
-  -I ${GITHUB_WORKSPACE}/entservices-testframework/Tests/headers/rdk/iarmmgrs-hal \
-  -I ${GITHUB_WORKSPACE}/entservices-testframework/Tests/headers/ccec/drivers \
-  -I ${GITHUB_WORKSPACE}/entservices-testframework/Tests/headers/network \
-  -I ${GITHUB_WORKSPACE}/entservices-testframework/Tests/mocks \
-  -I ${GITHUB_WORKSPACE}/entservices-testframework/Tests/mocks/thunder \
-  -I ${GITHUB_WORKSPACE}/entservices-testframework/Tests/mocks/devicesettings \
-  -I /usr/include/libdrm \
-  -include ${GITHUB_WORKSPACE}/entservices-testframework/Tests/mocks/devicesettings.h \
-  -include ${GITHUB_WORKSPACE}/entservices-testframework/Tests/mocks/Iarm.h \
-  -include ${GITHUB_WORKSPACE}/entservices-testframework/Tests/mocks/Rfc.h \
-  -include ${GITHUB_WORKSPACE}/entservices-testframework/Tests/mocks/RBus.h \
-  -include ${GITHUB_WORKSPACE}/entservices-testframework/Tests/mocks/Telemetry.h \
-  -include ${GITHUB_WORKSPACE}/entservices-testframework/Tests/mocks/Udev.h \
-  -include ${GITHUB_WORKSPACE}/entservices-testframework/Tests/mocks/pkg.h \
-  -include ${GITHUB_WORKSPACE}/entservices-testframework/Tests/mocks/maintenanceMGR.h \
-  -include ${GITHUB_WORKSPACE}/entservices-testframework/Tests/mocks/gdialservice.h \
-  -include ${GITHUB_WORKSPACE}/entservices-testframework/Tests/mocks/wpa_ctrl_mock.h \
-  -include ${GITHUB_WORKSPACE}/entservices-testframework/Tests/mocks/secure_wrappermock.h \
-  -include ${GITHUB_WORKSPACE}/entservices-testframework/Tests/mocks/HdmiCec.h \
-  -Wall -Wno-unused-result -Werror -Wno-error=format \
-  -Wl,-wrap,system -Wl,-wrap,popen -Wl,-wrap,syslog \
+  -Wall -Wno-unused-result -Wno-error=format \
   -DENABLE_TELEMETRY_LOGGING -DUSE_IARMBUS \
-  -DENABLE_SYSTEM_GET_STORE_DEMO_LINK -DENABLE_DEEP_SLEEP \
-  -DENABLE_SET_WAKEUP_SRC_CONFIG -DENABLE_THERMAL_PROTECTION \
-  -DUSE_DRM_SCREENCAPTURE -DHAS_API_SYSTEM -DHAS_API_POWERSTATE \
-  -DHAS_RBUS -DDISABLE_SECURITY_TOKEN -DENABLE_DEVICE_MANUFACTURER_INFO \
   -DUSE_THUNDER_R4 -DTHUNDER_VERSION=4 -DTHUNDER_VERSION_MAJOR=4 -DTHUNDER_VERSION_MINOR=4"
 
 cmake --build build/entservices-hdmicecsource --target install
+echo "--- build complete ---"
 echo "======================================================================================"
 exit 0

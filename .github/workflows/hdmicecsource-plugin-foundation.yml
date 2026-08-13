@@ -393,6 +393,19 @@ jobs:
             echo "Copied $gcno_count .gcno files (archived) to guest staging area"
           fi
 
+          # ---- Check what DS/CEC/IARM libs the guest already ships ----
+          ssh "${ssh_key_arg[@]}" "${ssh_opts[@]}" -p "$selected_ssh_port" "$selected_ssh_user@127.0.0.1" '
+            echo "===== Guest-native DS/CEC/IARM libraries ====="
+            for pat in libds libdshalcli libRCEC libRCECHal libRCECOSHal libIARMBus libtelemetry; do
+              found=$(find /usr/lib /lib -maxdepth 2 -name "${pat}*" 2>/dev/null)
+              if [ -n "$found" ]; then
+                echo "$found" | while read -r f; do ls -lh "$f"; done
+              else
+                echo "  NOT FOUND: ${pat}*"
+              fi
+            done
+          ' 2>&1 | tee "$QEMU_WORKDIR/guest-native-libs.log" || true
+
           # Validate staged plugins against target image before live replacement.
           ssh "${ssh_key_arg[@]}" "${ssh_opts[@]}" -p "$selected_ssh_port" "$selected_ssh_user@127.0.0.1" '
             set -euo pipefail
@@ -515,8 +528,8 @@ jobs:
           for so in entservices-hdmicecsource/artifacts/plugins/*.so; do
             [[ -f "$so" ]] || continue
             readelf -d "$so" 2>/dev/null | awk '/NEEDED/{gsub(/[][]/,""); print $NF}'
-          done | sort -u | grep -E '^libWPEFramework' > "$soname_file" || true
-          echo "===== WPEFramework sonames required by plugin ====="
+          done | sort -u > "$soname_file" || true
+          echo "===== Shared-lib sonames required by plugin ====="
           cat "$soname_file" || true
 
           if [[ -s "$soname_file" ]]; then
@@ -611,6 +624,22 @@ jobs:
             old_plugin_ok=true
           fi
           echo "old_plugin_ok=$old_plugin_ok" >> "$QEMU_WORKDIR/plugin-debug.env"
+
+          # ---- Crash capture: "empty reply"/no result means WPEFramework SIGSEGV'd ----
+          # Identifies the faulting library/offset so a mock-vs-real ABI crash is visible.
+          if ! grep -q '"result"' "$QEMU_WORKDIR/baseline-old-plugin.log" 2>/dev/null; then
+            echo "===== DIAGNOSING WPEFramework CRASH (empty reply / no result) ====="
+            ssh "${ssh_key_arg[@]}" "${ssh_opts[@]}" -p "$selected_ssh_port" "$selected_ssh_user@127.0.0.1" '
+              echo "----- dmesg: segfault/oops lines -----"
+              dmesg 2>/dev/null | grep -iE "segfault|general protection|traps|oops|core dump|WPEFramework|WPEProcess" | tail -n 40 || true
+              echo "----- WPEFramework service state -----"
+              systemctl is-active WPEFramework wpeframework 2>/dev/null || true
+              echo "----- WPEFramework journal (last 60) -----"
+              journalctl -u WPEFramework -u wpeframework -n 60 --no-pager 2>/dev/null | tail -n 60 || true
+              echo "----- coredumpctl (if present) -----"
+              command -v coredumpctl >/dev/null 2>&1 && coredumpctl list --no-pager 2>/dev/null | tail -n 10 || echo "  (no coredumpctl)"
+            ' 2>&1 | tee "$QEMU_WORKDIR/plugin-crash-diagnostic.log" || true
+          fi
 
           # ---- Step 2: preserve rollback backup if missing ----
           ssh "${ssh_key_arg[@]}" "${ssh_opts[@]}" -p "$selected_ssh_port" "$selected_ssh_user@127.0.0.1" '

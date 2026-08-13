@@ -1303,7 +1303,6 @@ typedef enum : uint32_t {
 } HdmiCecSourceEventType_t;
 
 
-
 class NotificationHandler : public Exchange::IHdmiCecSource::INotification {
     private:
         /** @brief Mutex */
@@ -1458,6 +1457,12 @@ class NotificationHandler : public Exchange::IHdmiCecSource::INotification {
 
 class HdmiCecSourceTest : public ::testing::Test {
 protected:
+    // FIRST member, deliberately.  Members are constructed in declaration order (after base
+    // classes, before this constructor's body) and destroyed in reverse, so declaring it here
+    // gives it the widest possible window: the CEC settings file is in its known state before
+    // anything else in this fixture exists, and the host's own file is not put back until
+    // every other member has been destroyed.  See ScopedCecSettingsFile for why custody of
+    // this one path matters and what it measured before it was owned.
     ScopedCecSettingsFile cecSettingsFileCustody;
     Core::ProxyType<Plugin::HdmiCecSource> plugin;
     Core::JSONRPC::Handler& handler;
@@ -1655,14 +1660,33 @@ protected:
 
 class HdmiCecSourceInitializedTest : public HdmiCecSourceTest {
 protected:
+    // FIRST member of this fixture, deliberately.  It is constructed after the base subobject and
+    // before the constructor body below, and destroyed after the destructor body above has
+    // finished - which is the only window that brackets BOTH the provisioning this fixture does
+    // in its constructor and the plugin teardown it does in its destructor.  See
+    // ScopedDevicePropertiesFile for the measurement that made it necessary: without it this
+    // fixture left /etc/device.properties ABSENT on the host, and its derived
+    // HdmiCecSourceInitializedEventTest did the same.
+    ScopedDevicePropertiesFile devicePropertiesCustody;
+
     HdmiCecSourceInitializedTest()
         : HdmiCecSourceTest()
+        , devicePropertiesCustody()
     {
-        system("ls -lh /etc/");
-        removeFile("/etc/device.properties");
-        system("ls -lh /etc/");
-        createFile("/etc/device.properties", "RDK_PROFILE=STB");
-        system("ls -lh /etc/");
+        // The profile goes on through the guard that captured the host's own file, so the same
+        // object that provisions it is the one that puts the host's value back.  The bytes are
+        // exactly what the previous removeFile()/createFile() pair wrote ("RDK_PROFILE=STB\n"),
+        // so the plugin sees precisely the file it saw before - the difference is that the
+        // host's file is now borrowed rather than destroyed.
+        //
+        // Not fatal on failure: a fixture that could not take custody must not silently proceed
+        // to assert on an Initialize() whose outcome then depends on another writer's file, and
+        // the message says which of the two happened.
+        EXPECT_TRUE(devicePropertiesCustody.Provision(kSourceProfileContents))
+            << "could not provision " << kDevicePropertiesFile << " with the STB profile this "
+               "fixture requires (custody "
+            << (devicePropertiesCustody.Captured() ? "held, write failed" : "not granted")
+            << "), so plugin->Initialize() below is reading whatever is on the host";
         EXPECT_EQ(string(""), plugin->Initialize(&service));
         EXPECT_EQ(Core::ERROR_NONE, handler.Invoke(connection, _T("setEnabled"), _T("{\"enabled\": true}"), response));
         EXPECT_EQ(response, string("{\"success\":true}"));
@@ -1676,23 +1700,142 @@ protected:
                 }
             EXPECT_EQ(Core::ERROR_NONE, handler.Invoke(connection, _T("setEnabled"), _T("{\"enabled\": false}"), response));
             EXPECT_EQ(response, string("{\"success\":true}"));
+
+            // Re-state the profile immediately before Deinitialize, because Deinitialize READS IT
+            // AGAIN and its behaviour turns on the answer: HdmiCecSource::Deinitialize calls
+            // searchRdkProfile() and returns early for anything that is not STB, skipping the
+            // teardown that stops this plugin's OSD/discovery thread.  That thread then keeps
+            // calling Connection::sendTo through a CEC mock the base fixture is about to delete,
+            // and the mock's guard is a NON-FATAL EXPECT_NE followed by an unconditional
+            // dereference - so the binary SEGFAULTS instead of failing a test.  Any writer on this
+            // shared host (the sink plugin's suite provisions the same path with RDK_PROFILE=TV)
+            // can put the file into that state while this fixture's cases are running, and only a
+            // re-statement at this point closes the window.  Under the custody this guard holds,
+            // cooperating writers wait rather than interleave.
+            EXPECT_TRUE(devicePropertiesCustody.Provision(kSourceProfileContents))
+                << "could not re-state the STB profile before Deinitialize; if the profile on the "
+                   "host is not STB, Deinitialize will return early and leave this plugin's "
+                   "worker thread running past the release of the CEC mock";
+
             plugin->Deinitialize(&service);
-	    removeFile("/etc/device.properties");
-	    
+
+            // Deinitialize is asynchronous in its effects: it releases the implementation, whose
+            // destructor stops CEC (setEnabledInternal(false)) and only then clears the static
+            // _instance pointer.  Waiting for that pointer to clear is waiting for the plugin's
+            // own threads to have been stopped, on an observable the production code publishes,
+            // rather than on a fixed sleep - and it has to happen HERE, because the base
+            // fixture's destructor (which runs next) deletes the CEC, IARM and device-settings
+            // mocks those threads call into.
+            //
+            // Reported rather than asserted: the wait exists to protect the teardown, and the
+            // condition it guards against is already covered by the re-statement above.  A
+            // verdict here would attribute a host-level profile problem to whichever test
+            // happened to own the fixture.
+            const int kTeardownWaitMs = 5000;
+            int waitedMs = 0;
+            while ((Plugin::HdmiCecSourceImplementation::_instance != nullptr) && (waitedMs < kTeardownWaitMs)) {
+                usleep(10 * 1000);
+                waitedMs += 10;
+            }
+            if (Plugin::HdmiCecSourceImplementation::_instance != nullptr) {
+                printf("HdmiCecSourceInitializedTest: the plugin implementation was still alive %d ms "
+                       "after Deinitialize, so its worker threads may outlive the mocks this fixture "
+                       "is about to release\n",
+                    waitedMs);
+            }
+
+            // NO removeFile HERE.  The file this fixture borrowed is handed back by
+            // devicePropertiesCustody when it is destroyed a moment from now - to its captured
+            // contents, mode and owner, or to ABSENT if that is what was there.  Deleting it
+            // unconditionally is what left the host without a profile file at all.
     }
 };
 
 
 class HdmiCecSourceSettingsTest : public HdmiCecSourceTest {
 protected:
+    bool m_devicePropertiesPresent;
+    std::string m_devicePropertiesContents;
+    // The permissions the host's own /etc/device.properties carried when SetUp captured it.
+    // Held separately from the contents because the tests in this fixture do not merely read
+    // the file: loadSettings_* delete it and recreate it through an ofstream, which lands at
+    // 0666 & ~umask (0644 here).  Restoring the bytes while letting that mode stand would
+    // leave a host-global path permanently more permissive than this fixture found it, which
+    // is a change to the machine even though every assertion passed.
+    mode_t m_devicePropertiesMode;
+    // The owner the host's own /etc/device.properties carried, captured and restored for the
+    // same reason as the mode: bytes under a different owner are not the state that was borrowed,
+    // and on this path the owner decides who may write it.
+    uid_t m_devicePropertiesUid;
+    gid_t m_devicePropertiesGid;
+    // Whether SetUp actually captured a snapshot. TearDown runs even when SetUp aborts on a
+    // fatal assertion, and restoring from an uncaptured snapshot means "the file was absent",
+    // which would delete a real /etc/device.properties this fixture never read.
+    bool m_devicePropertiesSnapshotCaptured;
+    // CUSTODY HELD FOR THE WHOLE TEST, not for the duration of each write.
+    //
+    // This fixture's window is SetUp -> test body -> TearDown, and the test bodies in it delete
+    // and recreate /etc/device.properties themselves, so the snapshot and the restore are
+    // separated by arbitrary test code.  A lock taken per write would leave that gap unguarded
+    // and the TearDown restore could then put SetUp's snapshot over an update another writer
+    // made in between.  Held here from before the snapshot until after the restore, it is one
+    // window; the lock is reference-counted per path inside the process, so the nested
+    // acquisitions inside writeFile()/restoreFile() are increments rather than deadlocks.
+    // unique_ptr because SetUp and TearDown are separate functions and GoogleTest guarantees
+    // TearDown runs even when a test aborts on a fatal failure or is skipped.
+    std::unique_ptr<PathCustodyLock> m_devicePropertiesCustody;
+
     HdmiCecSourceSettingsTest()
         : HdmiCecSourceTest()
+        , m_devicePropertiesPresent(false)
+        , m_devicePropertiesContents()
+        , m_devicePropertiesMode(0)
+        , m_devicePropertiesUid(static_cast<uid_t>(-1))
+        , m_devicePropertiesGid(static_cast<gid_t>(-1))
+        , m_devicePropertiesSnapshotCaptured(false)
+        , m_devicePropertiesCustody()
     {
         
     }
     virtual ~HdmiCecSourceSettingsTest() override
     {
         removeFile(CEC_SETTING_ENABLED_FILE);
+    }
+
+    void SetUp() override
+    {
+        // Custody FIRST, and abort before touching anything if it is not granted: a fixture that
+        // cannot serialise itself against another writer of this host-global path must not
+        // provision it at all, because its TearDown restore would then be unguarded too.
+        m_devicePropertiesCustody.reset(new PathCustodyLock("/etc/device.properties"));
+        ASSERT_TRUE(m_devicePropertiesCustody->Held())
+            << "Could not take custody of /etc/device.properties within its bound, so this test "
+               "cannot safely provision it; nothing has been changed.";
+
+        m_devicePropertiesSnapshotCaptured = readFile("/etc/device.properties", m_devicePropertiesPresent, m_devicePropertiesContents, m_devicePropertiesMode, &m_devicePropertiesUid, &m_devicePropertiesGid);
+        ASSERT_TRUE(m_devicePropertiesSnapshotCaptured) << "Could not snapshot /etc/device.properties, so this test cannot safely provision it.";
+        // Provisioned without a mode, so the profile this fixture needs is written under
+        // whatever permissions the path already carries; the captured mode and owner are kept
+        // for the restore, which is the only place they have to be reasserted.
+        ASSERT_TRUE(writeFile("/etc/device.properties", "RDK_PROFILE=STB\n"));
+    }
+
+    void TearDown() override
+    {
+        // Restore only what was captured. Without this guard a failed capture would leave
+        // m_devicePropertiesPresent false and the restore would remove the host's own file.
+        if (m_devicePropertiesSnapshotCaptured) {
+            // The captured mode and owner go back with the captured bytes: a test body in this
+            // fixture may have deleted and recreated the file at the ofstream default in
+            // between, so the mode and owner on the path right now are this suite's, not the
+            // host's.
+            EXPECT_TRUE(restoreFile("/etc/device.properties", m_devicePropertiesPresent, m_devicePropertiesContents, m_devicePropertiesMode, m_devicePropertiesUid, m_devicePropertiesGid));
+        }
+
+        // Released only after the restore, so the custody window closes on the same state it
+        // opened on.  Unconditional: the lock has to be dropped even when nothing was captured,
+        // or the next test in this fixture would find its own acquisition already counted.
+        m_devicePropertiesCustody.reset();
     }
 };
 

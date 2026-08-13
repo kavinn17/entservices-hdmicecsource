@@ -1458,6 +1458,7 @@ class NotificationHandler : public Exchange::IHdmiCecSource::INotification {
 
 class HdmiCecSourceTest : public ::testing::Test {
 protected:
+    ScopedCecSettingsFile cecSettingsFileCustody;
     Core::ProxyType<Plugin::HdmiCecSource> plugin;
     Core::JSONRPC::Handler& handler;
     DECL_CORE_JSONRPC_CONX connection;

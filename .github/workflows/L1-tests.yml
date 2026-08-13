@@ -652,6 +652,7 @@ jobs:
 
       - name: Run unit tests without valgrind
         run: >
+          sudo -E env
           PATH=$GITHUB_WORKSPACE/install/usr/bin:${PATH}
           LD_LIBRARY_PATH=$GITHUB_WORKSPACE/install/usr/lib:$GITHUB_WORKSPACE/install/usr/lib/wpeframework/plugins:${LD_LIBRARY_PATH}
           GTEST_OUTPUT="json:$(pwd)/rdkL1TestResults.json"
@@ -662,6 +663,7 @@ jobs:
       - name: Run unit tests with valgrind
         if: ${{ !env.ACT && inputs.caller_source != 'testframework' }}
         run: >
+          sudo -E env
           PATH=$GITHUB_WORKSPACE/install/usr/bin:${PATH}
           LD_LIBRARY_PATH=$GITHUB_WORKSPACE/install/usr/lib:$GITHUB_WORKSPACE/install/usr/lib/wpeframework/plugins:${LD_LIBRARY_PATH}
           GTEST_OUTPUT="json:$(pwd)/rdkL1TestResults.json"

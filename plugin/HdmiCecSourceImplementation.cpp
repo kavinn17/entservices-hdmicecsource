@@ -384,7 +384,6 @@ namespace WPEFramework
                _powerManagerPlugin.Reset();
            }
            _registeredEventHandlers = false;
-           //coverity fix: Uncaught exception - wrap UnRegister call in try-catch to prevent exception from escaping destructor
            try
            {
                device::Host::getInstance().UnRegister(baseInterface<device::Host::IDisplayDeviceEvents>());

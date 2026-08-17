@@ -28,7 +28,7 @@ cd ${GITHUB_WORKSPACE}
 #1. Install Dependencies and packages
 
 apt update
-apt install -y libcurl4-openssl-dev valgrind lcov clang libsystemd-dev libboost-all-dev curl libunwind-dev libdrm-dev
+apt install -y libcurl4-openssl-dev valgrind lcov clang libsystemd-dev libboost-all-dev curl libunwind-dev libdrm-dev patchelf
 pip install jsonref
 
 ###########################################
@@ -94,6 +94,20 @@ cmake -G Ninja -S Thunder -B build/Thunder \
     -DEXCEPTIONS_ENABLE=ON \
 
 cmake --build build/Thunder --target install
+
+# Fix Thunder library SONAMEs to version 4 (matching the QEMU guest image).
+# The R4.4.1 source + test-framework patches produce SOVERSION=1, but the
+# guest ships .so.4; without this the plugin records NEEDED .so.1 and segfaults.
+THUNDER_SOVERSION=4
+INSTALL_LIB_DIR="$GITHUB_WORKSPACE/install/usr/lib"
+for lib in WPEFrameworkCore WPEFrameworkPlugins WPEFrameworkMessaging WPEFrameworkWebSocket WPEFrameworkCOM; do
+    real_file="$(find "$INSTALL_LIB_DIR" -maxdepth 1 -name "lib${lib}.so*" -type f ! -name "*.so" 2>/dev/null | head -1)"
+    [[ -n "$real_file" ]] || continue
+    patchelf --set-soname "lib${lib}.so.${THUNDER_SOVERSION}" "$real_file"
+    ln -sf "$(basename "$real_file")" "$INSTALL_LIB_DIR/lib${lib}.so.${THUNDER_SOVERSION}"
+    ln -sf "lib${lib}.so.${THUNDER_SOVERSION}" "$INSTALL_LIB_DIR/lib${lib}.so"
+    echo "Fixed SONAME: lib${lib}.so -> .so.${THUNDER_SOVERSION}"
+done
 
 
 ############################
@@ -185,11 +199,48 @@ TELEOF
 
 # --- Stub shared libraries (link-time only; MUST NOT be deployed to guest) ---
 # Placed in a subdirectory so the workflow runtime-lib collector never picks them up.
+# Sonames MUST match the versioned names on the QEMU guest image so the plugin's
+# NEEDED entries resolve at runtime (e.g. libRCEC.so.0, not libRCEC.so).
+# Stubs export the real function symbols the plugin code references, so the
+# linker's --as-needed keeps the library in the NEEDED list.
 STUB_LIB="$INSTALL_LIB/build-stubs"
 mkdir -p "$STUB_LIB"
-for lib in ds dshalcli RCEC RCECOSHal IARMBus telemetry_msgsender; do
+
+# IARMBus stub — exports symbols used via UtilsIarm.h
+cat > /tmp/stub_IARMBus.c << 'EOF'
+#include <stddef.h>
+typedef int IARM_Result_t;
+typedef void* IARM_EventHandler_t;
+IARM_Result_t IARM_Bus_Init(const char *n) { return 0; }
+IARM_Result_t IARM_Bus_Connect(void) { return 0; }
+IARM_Result_t IARM_Bus_IsConnected(const char *n, int *c) { if(c) *c=1; return 0; }
+IARM_Result_t IARM_Bus_RegisterEventHandler(const char *o, int e, void *h) { return 0; }
+IARM_Result_t IARM_Bus_UnRegisterEventHandler(const char *o, int e) { return 0; }
+IARM_Result_t IARM_Bus_Call(const char *o, const char *m, void *a, size_t s) { return 0; }
+EOF
+gcc -shared -o "$STUB_LIB/libIARMBus.so" /tmp/stub_IARMBus.c -Wl,-soname,libIARMBus.so.0
+
+# telemetry stub — exports t2_event_s used when ENABLE_TELEMETRY_LOGGING is set
+cat > /tmp/stub_telemetry.c << 'EOF'
+void t2_event_s(const char* marker, const char* value) { (void)marker; (void)value; }
+void t2_event_d(const char* marker, int value) { (void)marker; (void)value; }
+EOF
+gcc -shared -o "$STUB_LIB/libtelemetry_msgsender.so" /tmp/stub_telemetry.c -Wl,-soname,libtelemetry_msgsender.so.0
+
+# CEC/OSAL/DS stubs — minimal symbols for link resolution
+declare -A STUB_SOVERSIONS=(
+    [RCEC]=0
+    [RCECOSHal]=0
+)
+for lib in ds dshalcli RCEC RCECOSHal; do
+    sover="${STUB_SOVERSIONS[$lib]:-}"
+    if [[ -n "$sover" ]]; then
+        soname="lib${lib}.so.${sover}"
+    else
+        soname="lib${lib}.so"
+    fi
     echo "void __${lib}_stub(void){}" | gcc -shared -o "$STUB_LIB/lib${lib}.so" \
-        -x c - -Wl,-soname,"lib${lib}.so"
+        -x c - -Wl,-soname,"$soname"
 done
 
 echo "Real headers and stub libraries installed."

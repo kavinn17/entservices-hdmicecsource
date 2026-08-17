@@ -362,7 +362,18 @@ namespace WPEFramework
 
          if(cecEnableStatus)
          {
-            setEnabledInternal(false, false);
+             try
+             {
+                 setEnabledInternal(false, false);
+             }
+             catch(const std::exception& e)
+             {
+                 LOGERR("Exception in setEnabledInternal during destructor: %s", e.what());
+             }
+             catch(...)
+             {
+                 LOGERR("Unknown exception in setEnabledInternal during destructor");
+             }
          }
 
          HdmiCecSourceImplementation::_instance = nullptr;
@@ -373,7 +384,18 @@ namespace WPEFramework
                _powerManagerPlugin.Reset();
            }
            _registeredEventHandlers = false;
-           device::Host::getInstance().UnRegister(baseInterface<device::Host::IDisplayDeviceEvents>());
+           try
+           {
+               device::Host::getInstance().UnRegister(baseInterface<device::Host::IDisplayDeviceEvents>());
+           }
+           catch(const std::exception& e)
+           {
+               LOGERR("Exception in UnRegister: %s", e.what());
+           }
+           catch(...)
+           {
+               LOGERR("Unknown exception in UnRegister");
+           }
     }
 
     Core::hresult HdmiCecSourceImplementation::Configure(PluginHost::IShell* service)

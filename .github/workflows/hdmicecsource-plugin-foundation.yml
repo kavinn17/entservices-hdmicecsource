@@ -959,6 +959,7 @@ jobs:
           name: qemu-hdmicecsource-build-and-tests-${{ github.run_id }}
           path: |
             entservices-hdmicecsource/artifacts/plugins/**
+            entservices-hdmicecsource/artifacts/runtime-libs/**
             /tmp/qemu-artifacts/*.log
             /tmp/qemu-artifacts/*.txt
             /tmp/qemu-artifacts/*.pid

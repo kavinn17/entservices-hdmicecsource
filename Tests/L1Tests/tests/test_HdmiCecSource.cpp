@@ -105,7 +105,7 @@ namespace
 		if (file.Exists()) {
 			file.Destroy();
 		}
-
+        
 		file.Create();
 		file.Close();
 	}

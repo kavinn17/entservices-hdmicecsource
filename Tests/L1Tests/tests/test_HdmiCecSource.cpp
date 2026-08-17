@@ -106,11 +106,6 @@ namespace
 			file.Destroy();
 		}
 
-		//Coverity defect: USE_AFTER_FREE - intentional use after free
-		int* ptr = new int(42);
-		delete ptr;
-		*ptr = 100; // Using freed memory
-		
 		file.Create();
 		file.Close();
 	}

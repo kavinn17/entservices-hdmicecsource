@@ -227,12 +227,82 @@ void t2_event_d(const char* marker, int value) { (void)marker; (void)value; }
 EOF
 gcc -shared -o "$STUB_LIB/libtelemetry_msgsender.so" /tmp/stub_telemetry.c -Wl,-soname,libtelemetry_msgsender.so.0
 
-# CEC/OSAL/DS stubs — minimal symbols for link resolution
+# libds.so — C++ stub with real device:: symbol implementations.
+# Unlike CEC/OSAL, the QEMU guest ships no libds.so of its own, so this must be
+# a functioning definition (not a 1-symbol placeholder) and gets deployed to the
+# guest by the runtime-lib collector, not left in build-stubs/.
+cat > /tmp/stub_ds.cpp << 'EOF'
+#include <string>
+#include <vector>
+#include <cstdint>
+
+typedef int dsError_t;
+typedef int dsDisplayEvent_t;
+
+namespace device {
+
+class Manager {
+public:
+    static void Initialize();
+    static void DeInitialize();
+};
+void Manager::Initialize() {}
+void Manager::DeInitialize() {}
+
+class VideoOutputPort {
+public:
+    class Display {
+    public:
+        void getEDIDBytes(std::vector<uint8_t>& edid) const;
+        virtual ~Display();
+    };
+
+    virtual ~VideoOutputPort();
+    const Display& getDisplay();
+    bool isDisplayConnected() const;
+};
+
+VideoOutputPort::Display::~Display() {}
+void VideoOutputPort::Display::getEDIDBytes(std::vector<uint8_t>& edid) const { (void)edid; }
+VideoOutputPort::~VideoOutputPort() {}
+const VideoOutputPort::Display& VideoOutputPort::getDisplay() { static Display d; return d; }
+bool VideoOutputPort::isDisplayConnected() const { return false; }
+
+class Host {
+public:
+    struct IDisplayDeviceEvents {
+        virtual ~IDisplayDeviceEvents() = default;
+        virtual void OnDisplayHDMIHotPlug(dsDisplayEvent_t displayEvent);
+    };
+
+    static Host& getInstance();
+    VideoOutputPort& getVideoOutputPort(const std::string& name);
+    std::string getDefaultVideoPortName();
+    dsError_t Register(IDisplayDeviceEvents* listener, const std::string& clientName = "");
+    dsError_t UnRegister(IDisplayDeviceEvents* listener);
+};
+
+void Host::IDisplayDeviceEvents::OnDisplayHDMIHotPlug(dsDisplayEvent_t displayEvent) { (void)displayEvent; }
+Host& Host::getInstance() { static Host h; return h; }
+VideoOutputPort& Host::getVideoOutputPort(const std::string& name) { (void)name; static VideoOutputPort p; return p; }
+std::string Host::getDefaultVideoPortName() { return "HDMI0"; }
+dsError_t Host::Register(IDisplayDeviceEvents* listener, const std::string& clientName) { (void)listener; (void)clientName; return 0; }
+dsError_t Host::UnRegister(IDisplayDeviceEvents* listener) { (void)listener; return 0; }
+
+} // namespace device
+
+extern "C" void __ds_stub(void) {}
+EOF
+g++ -shared -fPIC -g -o "$INSTALL_LIB/libds.so" /tmp/stub_ds.cpp -Wl,-soname,libds.so
+ln -sf ../libds.so "$STUB_LIB/libds.so"
+
+# CEC/OSAL stubs — minimal symbols for link resolution only; the guest's real
+# libRCEC.so/libRCECOSHal.so provide the actual device:: symbols at runtime.
 declare -A STUB_SOVERSIONS=(
     [RCEC]=0
     [RCECOSHal]=0
 )
-for lib in ds dshalcli RCEC RCECOSHal; do
+for lib in dshalcli RCEC RCECOSHal; do
     sover="${STUB_SOVERSIONS[$lib]:-}"
     if [[ -n "$sover" ]]; then
         soname="lib${lib}.so.${sover}"
@@ -253,7 +323,9 @@ for h in rdk/ds/manager.hpp rdk/halif/ds-hal/dsTypes.h rdk/iarmbus/libIARM.h \
     [ -f "$INSTALL_INC/${h}" ] && echo "  OK   ${h}" || echo "  MISS ${h}" >&2
 done
 echo "--- Stub library verification ---"
-ls -1 "$INSTALL_LIB/build-stubs"/lib{ds,dshalcli,RCEC,RCECOSHal,IARMBus,telemetry_msgsender}.so 2>&1
+ls -1 "$INSTALL_LIB/libds.so" "$INSTALL_LIB/build-stubs"/lib{dshalcli,RCEC,RCECOSHal,IARMBus,telemetry_msgsender}.so 2>&1
+echo "--- libds.so exported device:: symbols ---"
+nm -D -C "$INSTALL_LIB/libds.so" | grep -c 'device::' || true
 echo "---"
 
 ls -la ${GITHUB_WORKSPACE}

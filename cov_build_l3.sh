@@ -81,10 +81,10 @@ cmake -G Ninja -S "${GITHUB_WORKSPACE}" -B build/entservices-hdmicecsource \
   -DTELEMETRY_FOUND:BOOL=TRUE \
   -DTELEMETRY_LIBRARIES:FILEPATH="${LIBPFX}/libtelemetry_msgsender.so" \
   -DTELEMETRY_INCLUDE_DIRS:PATH="${INCPFX}" \
-  -DCMAKE_C_FLAGS="--coverage" \
+  -DCMAKE_C_FLAGS="--coverage -g" \
   -DCMAKE_SHARED_LINKER_FLAGS="--coverage" \
   -DCMAKE_CXX_FLAGS="-DEXCEPTIONS_ENABLE=ON \
-  --coverage \
+  --coverage -g \
   -Wall -Wno-unused-result -Wno-error=format \
   -DENABLE_TELEMETRY_LOGGING -DUSE_IARMBUS \
   -DUSE_THUNDER_R4 -DTHUNDER_VERSION=4 -DTHUNDER_VERSION_MAJOR=4 -DTHUNDER_VERSION_MINOR=4"

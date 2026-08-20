@@ -47,8 +47,8 @@ cd "$GITHUB_WORKSPACE"
 
 git clone --branch 1.0.17 https://github.com/rdkcentral/entservices-testframework.git
 
-# Real header sources for DS/CEC/IARM (cloned for headers only, not built)
-git clone --branch develop --depth 1 https://github.com/rdkcentral/hdmicec.git
+# support/AIDL matches the guest's shipped libRCEC/libRCECOSHal ABI (has the AIDL changes)
+git clone --branch support/AIDL --depth 1 https://github.com/rdkcentral/hdmicec.git
 git clone --depth 1 https://github.com/rdkcentral/iarmbus.git
 git clone --branch 6.0.0 --depth 1 https://github.com/rdkcentral/rdk-halif-device_settings.git
 git clone --branch develop --depth 1 https://github.com/rdkcentral/devicesettings.git devicesettings-src

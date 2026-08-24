@@ -1751,11 +1751,9 @@ namespace WPEFramework
                                 break;
                             }
 		    			}
-		    			if (retry){
-				if (retry){
-					LOGINFO("cec device: %d update time out", i);
-				}
-			}
+						if (retry) {
+							LOGINFO("cec device: %d update time out", i);
+						}
 		}
             } else {
                 pthread_mutex_unlock(&(_instance->m_lockUpdate));

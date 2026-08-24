@@ -83,7 +83,7 @@ static std::atomic<int32_t> powerState{DEVICE_POWER_STATE_OFF};
 static PowerStatus tvPowerState(PowerStatus::POWER_STATUS_NOT_KNOWN);
 static bool isDeviceActiveSource = false;
 static bool isLGTvConnected = false;
-static std::atomic<PowerState> cecPowerState{WPEFramework::Exchange::IPowerManager::ON};
+static std::atomic<PowerState> cecPowerState{WPEFramework::Exchange::IPowerManager::POWER_STATE_ON};
 
 #define KEY_UNSUPPORTED 0xFF
 

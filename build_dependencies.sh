@@ -28,7 +28,7 @@ cd ${GITHUB_WORKSPACE}
 #1. Install Dependencies and packages
 
 apt update
-apt install -y libcurl4-openssl-dev valgrind lcov clang libsystemd-dev libboost-all-dev curl libunwind-dev libdrm-dev patchelf
+apt install -y libcurl4-openssl-dev valgrind lcov clang libsystemd-dev libboost-all-dev curl libunwind-dev libdrm-dev patchelf autoconf automake libtool pkg-config
 pip install jsonref
 
 ###########################################
@@ -165,6 +165,9 @@ cp "$GITHUB_WORKSPACE/devicesettings-src/ds/include/"*.h   "$INSTALL_INC/rdk/ds/
 # These are the chain deps that the C++ wrappers pull in transitively.
 mkdir -p "$INSTALL_INC/rdk/halif/ds-hal"
 cp "$GITHUB_WORKSPACE/rdk-halif-device_settings/include/"*.h "$INSTALL_INC/rdk/halif/ds-hal/"
+# devicesettings' own Makefile.am also expects the legacy rdk/ds-hal location.
+mkdir -p "$INSTALL_INC/rdk/ds-hal"
+cp "$GITHUB_WORKSPACE/rdk-halif-device_settings/include/"*.h "$INSTALL_INC/rdk/ds-hal/"
 
 # --- CEC headers (full ccec + osal include trees) ---
 # Connection.hpp → CECFrame.hpp → Operands.hpp → Header.hpp → OpCode.hpp, etc.
@@ -227,14 +230,17 @@ void t2_event_d(const char* marker, int value) { (void)marker; (void)value; }
 EOF
 gcc -shared -o "$STUB_LIB/libtelemetry_msgsender.so" /tmp/stub_telemetry.c -Wl,-soname,libtelemetry_msgsender.so.0
 
-# libds.so — C++ stub with real device:: symbol implementations.
-# Unlike CEC/OSAL, the QEMU guest ships no libds.so of its own, so this must be
-# a functioning definition (not a 1-symbol placeholder) and gets deployed to the
-# guest by the runtime-lib collector, not left in build-stubs/.
+############################
+# Build DeviceSettings compatibility stubs as STATIC archives.
+#
+# The guest does not provide libds/libdshalcli/libdshal. Keep the functional
+# test stub linked into the plugin and never create a DS shared object.
+echo "======================================================================================"
+echo "Building static DeviceSettings stubs"
 cat > /tmp/stub_ds.cpp << 'EOF'
+#include <cstdint>
 #include <string>
 #include <vector>
-#include <cstdint>
 
 typedef int dsError_t;
 typedef int dsDisplayEvent_t;
@@ -265,7 +271,7 @@ public:
 VideoOutputPort::Display::~Display() {}
 void VideoOutputPort::Display::getEDIDBytes(std::vector<uint8_t>& edid) const { (void)edid; }
 VideoOutputPort::~VideoOutputPort() {}
-const VideoOutputPort::Display& VideoOutputPort::getDisplay() { static Display d; return d; }
+const VideoOutputPort::Display& VideoOutputPort::getDisplay() { static Display display; return display; }
 bool VideoOutputPort::isDisplayConnected() const { return false; }
 
 class Host {
@@ -283,8 +289,8 @@ public:
 };
 
 void Host::IDisplayDeviceEvents::OnDisplayHDMIHotPlug(dsDisplayEvent_t displayEvent) { (void)displayEvent; }
-Host& Host::getInstance() { static Host h; return h; }
-VideoOutputPort& Host::getVideoOutputPort(const std::string& name) { (void)name; static VideoOutputPort p; return p; }
+Host& Host::getInstance() { static Host host; return host; }
+VideoOutputPort& Host::getVideoOutputPort(const std::string& name) { (void)name; static VideoOutputPort port; return port; }
 std::string Host::getDefaultVideoPortName() { return "HDMI0"; }
 dsError_t Host::Register(IDisplayDeviceEvents* listener, const std::string& clientName) { (void)listener; (void)clientName; return 0; }
 dsError_t Host::UnRegister(IDisplayDeviceEvents* listener) { (void)listener; return 0; }
@@ -293,16 +299,30 @@ dsError_t Host::UnRegister(IDisplayDeviceEvents* listener) { (void)listener; ret
 
 extern "C" void __ds_stub(void) {}
 EOF
-g++ -shared -fPIC -g -o "$INSTALL_LIB/libds.so" /tmp/stub_ds.cpp -Wl,-soname,libds.so
-ln -sf ../libds.so "$STUB_LIB/libds.so"
+
+g++ -c -fPIC -g -std=c++17 -o /tmp/stub_ds.o /tmp/stub_ds.cpp
+ar rcs "$STUB_LIB/libds.a" /tmp/stub_ds.o
+ranlib "$STUB_LIB/libds.a"
+
+echo "void __dshalcli_stub(void){}" | gcc -c -fPIC -g -x c - -o /tmp/dshalcli_stub.o
+ar rcs "$STUB_LIB/libdshalcli.a" /tmp/dshalcli_stub.o
+ranlib "$STUB_LIB/libdshalcli.a"
+
+echo "void __dshal_stub(void){}" | gcc -c -fPIC -g -x c - -o /tmp/dshal_stub.o
+ar rcs "$STUB_LIB/libdshal.a" /tmp/dshal_stub.o
+ranlib "$STUB_LIB/libdshal.a"
+
+echo "Created static DS archives:"
+ls -lh "$STUB_LIB/libds.a" "$STUB_LIB/libdshalcli.a" "$STUB_LIB/libdshal.a"
 
 # CEC/OSAL stubs — minimal symbols for link resolution only; the guest's real
 # libRCEC.so/libRCECOSHal.so provide the actual device:: symbols at runtime.
+# Do not create any libds/libdshalcli shared stubs here.
 declare -A STUB_SOVERSIONS=(
     [RCEC]=0
     [RCECOSHal]=0
 )
-for lib in dshalcli RCEC RCECOSHal; do
+for lib in RCEC RCECOSHal; do
     sover="${STUB_SOVERSIONS[$lib]:-}"
     if [[ -n "$sover" ]]; then
         soname="lib${lib}.so.${sover}"
@@ -323,9 +343,10 @@ for h in rdk/ds/manager.hpp rdk/halif/ds-hal/dsTypes.h rdk/iarmbus/libIARM.h \
     [ -f "$INSTALL_INC/${h}" ] && echo "  OK   ${h}" || echo "  MISS ${h}" >&2
 done
 echo "--- Stub library verification ---"
-ls -1 "$INSTALL_LIB/libds.so" "$INSTALL_LIB/build-stubs"/lib{dshalcli,RCEC,RCECOSHal,IARMBus,telemetry_msgsender}.so 2>&1
-echo "--- libds.so exported device:: symbols ---"
-nm -D -C "$INSTALL_LIB/libds.so" | grep -c 'device::' || true
+ls -1 "$INSTALL_LIB/build-stubs"/lib{ds,dshalcli,dshal}.a \
+      "$INSTALL_LIB/build-stubs"/lib{RCEC,RCECOSHal,IARMBus,telemetry_msgsender}.so 2>&1
+echo "--- libds.a exported device:: symbols (expect hundreds, not <20) ---"
+nm -C "$INSTALL_LIB/build-stubs/libds.a" 2>/dev/null | grep -c 'device::' || true
 echo "---"
 
 ls -la ${GITHUB_WORKSPACE}

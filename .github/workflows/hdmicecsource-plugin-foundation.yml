@@ -108,15 +108,27 @@ jobs:
           }
 
           # Collect runtime libraries that plugin may need at load time.
+          # DS archives are linked into the plugin and must never be deployed. Exclude
+          # any matching shared library as a guard against future build changes.
           # Exclude ALL libWPEFramework* libs — they are already in the QEMU image and
           # deploying any version from this build causes ABI mismatch SEGV on restart.
           find install/usr/lib -maxdepth 1 \( -type f -o -type l \) -name '*.so*' \
             ! -name 'libWPEFramework*' \
+            ! -name 'libds.so*' \
+            ! -name 'libdshal.so*' \
+            ! -name 'libdshalcli.so*' \
             | grep -v '/plugins/' | tee artifacts/runtime-libs/so-list.txt || true
           while IFS= read -r sofile; do
             [[ -n "$sofile" ]] || continue
             cp -f "$sofile" artifacts/runtime-libs/
           done < artifacts/runtime-libs/so-list.txt
+
+          if find artifacts/runtime-libs -maxdepth 1 -type f \
+              \( -name 'libds.so*' -o -name 'libdshal.so*' -o -name 'libdshalcli.so*' \) \
+              -print -quit | grep -q .; then
+            echo "ERROR: DS runtime library entered deployment artifacts" >&2
+            exit 1
+          fi
 
           # The CI toolchain's libstdc++ may be newer than the guest image's;
           # deploy it so GLIBCXX symbol versions required by the plugin resolve.

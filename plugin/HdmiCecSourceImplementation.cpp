@@ -379,6 +379,7 @@ namespace WPEFramework
     Core::hresult HdmiCecSourceImplementation::Configure(PluginHost::IShell* service)
     {
         LOGINFO("Configure");
+        
         ASSERT(service != nullptr);
         PowerState pwrStateCur = WPEFramework::Exchange::IPowerManager::POWER_STATE_UNKNOWN;
         PowerState pwrStatePrev = WPEFramework::Exchange::IPowerManager::POWER_STATE_UNKNOWN;

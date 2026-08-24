@@ -1763,10 +1763,11 @@ namespace WPEFramework
                         pthread_mutex_lock(&(_instance->m_lockUpdate));
                     }
 		        }
-		        pthread_mutex_unlock(&(_instance->m_lockUpdate));
-	            LOGINFO("%s: Thread exited", __FUNCTION__);
-	        }
+            }
         }
+		pthread_mutex_unlock(&(_instance->m_lockUpdate));
+	    LOGINFO("%s: Thread exited", __FUNCTION__);     
+        
     }
 
 

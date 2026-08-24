@@ -1757,21 +1757,17 @@ namespace WPEFramework
 						if (retry) {
 							LOGINFO("cec device: %d update time out", i);
 						}
-		}
-            } else {
-                pthread_mutex_unlock(&(_instance->m_lockUpdate));
-                usleep(10000); // sleep 10ms in deep sleep to avoid spinning while holding the lock
-                pthread_mutex_lock(&(_instance->m_lockUpdate));
-            }
-            else{
-                pthread_mutex_unlock(&(_instance->m_lockUpdate));
-                usleep(10000); //sleep for 10 milli sec
-                pthread_mutex_lock(&(_instance->m_lockUpdate));
-            }
-		}
-		pthread_mutex_unlock(&(_instance->m_lockUpdate));
-	        LOGINFO("%s: Thread exited", __FUNCTION__);
-	}
+                    } else {
+                        pthread_mutex_unlock(&(_instance->m_lockUpdate));
+                        usleep(10000); // sleep 10ms in deep sleep to avoid spinning while holding the lock
+                        pthread_mutex_lock(&(_instance->m_lockUpdate));
+                    }
+		        }
+		        pthread_mutex_unlock(&(_instance->m_lockUpdate));
+	            LOGINFO("%s: Thread exited", __FUNCTION__);
+	        }
+        }
+    }
 
 
     void  HdmiCecSourceImplementation::sendDeviceUpdateInfo(const int logicalAddress)

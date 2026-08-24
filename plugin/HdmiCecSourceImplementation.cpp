@@ -83,7 +83,7 @@ static std::atomic<int32_t> powerState{DEVICE_POWER_STATE_OFF};
 static PowerStatus tvPowerState(PowerStatus::POWER_STATUS_NOT_KNOWN);
 static bool isDeviceActiveSource = false;
 static bool isLGTvConnected = false;
-static PowerState cecPowerState = WPEFramework::Exchange::IPowerManager::ON;
+static std::atomic<PowerState> cecPowerState{WPEFramework::Exchange::IPowerManager::ON};
 
 #define KEY_UNSUPPORTED 0xFF
 
@@ -292,7 +292,7 @@ namespace WPEFramework
        {
              try
              { 
-                 conn.sendTo(header.from, MessageEncoder().encode(ReportPowerStatus(PowerStatus(powerState))));
+                 conn.sendTo(header.from, MessageEncoder().encode(ReportPowerStatus(PowerStatus(powerState.load()))));
              } 
              catch(...)
              {
@@ -455,8 +455,8 @@ namespace WPEFramework
                  res = _powerManagerPlugin->GetPowerState(pwrStateCur, pwrStatePrev);
                  if (Core::ERROR_NONE == res)
                  {
-                     powerState = (pwrStateCur == WPEFramework::Exchange::IPowerManager::POWER_STATE_ON)?0:1 ;
-                     LOGINFO("Current state is PowerManagerPlugin: (%d) powerState :%d \n",pwrStateCur,powerState);
+                     powerState.store((pwrStateCur == WPEFramework::Exchange::IPowerManager::POWER_STATE_ON)?DEVICE_POWER_STATE_ON:DEVICE_POWER_STATE_OFF);
+                     LOGINFO("Current state is PowerManagerPlugin: (%d) powerState :%d \n",pwrStateCur,powerState.load());
                  }
              }
 
@@ -795,14 +795,14 @@ namespace WPEFramework
 
             LOGINFO("Event IARM_BUS_PWRMGR_EVENT_MODECHANGED: State Changed %d -- > %d\r",
                     currentState, newState);
-            cecPowerState = newState;
+            cecPowerState.store(newState);
             if (WPEFramework::Exchange::IPowerManager::POWER_STATE_ON == newState)
             {
-                powerState = 0;
+                powerState.store(DEVICE_POWER_STATE_ON);
                 resumeCecStack();
             }
             else
-                powerState = 1;
+                powerState.store(DEVICE_POWER_STATE_OFF);
        }
 
        void HdmiCecSourceImplementation::resumeCecStack()
@@ -1612,7 +1612,7 @@ namespace WPEFramework
 		int i = 0;
 		pthread_mutex_lock(&(_instance->m_lock));//pthread_cond_wait should be mutex protected. //pthread_cond_wait will unlock the mutex and perfoms wait for the condition.
 		while (!_instance->m_pollThreadExit) {
-            if(!(WPEFramework::Exchange::IPowerManager::POWER_STATE_STANDBY_DEEP_SLEEP == cecPowerState)){
+            if(!(WPEFramework::Exchange::IPowerManager::POWER_STATE_STANDBY_DEEP_SLEEP == cecPowerState.load())){
 			    bool isActivateUpdateThread = false;
 			    LOGINFO("Starting cec device polling");
 			    for(i=0; i< LogicalAddress::UNREGISTERED; i++ ) {
@@ -1620,7 +1620,7 @@ namespace WPEFramework
 			    	if (isConnected){
 			    		isActivateUpdateThread = isConnected;
 			    	}
-                    if(_instance->m_pollThreadExit || (WPEFramework::Exchange::IPowerManager::POWER_STATE_STANDBY_DEEP_SLEEP == cecPowerState))
+                    if(_instance->m_pollThreadExit || (WPEFramework::Exchange::IPowerManager::POWER_STATE_STANDBY_DEEP_SLEEP == cecPowerState.load()))
                     {
                         break;
                     }
@@ -1650,7 +1650,7 @@ namespace WPEFramework
 
             while(!_instance->m_sendKeyEventThreadExit)
             {
-                if(!(WPEFramework::Exchange::IPowerManager::POWER_STATE_STANDBY_DEEP_SLEEP == cecPowerState))
+                if(!(WPEFramework::Exchange::IPowerManager::POWER_STATE_STANDBY_DEEP_SLEEP == cecPowerState.load()))
                 {
                     keyInfo.logicalAddr = -1;
                     keyInfo.keyCode = -1;
@@ -1693,7 +1693,7 @@ namespace WPEFramework
 		int i = 0;
 		pthread_mutex_lock(&(_instance->m_lockUpdate));//pthread_cond_wait should be mutex protected. //pthread_cond_wait will unlock the mutex and perfoms wait for the condition.
 		while (!_instance->m_updateThreadExit) {
-            if(!(WPEFramework::Exchange::IPowerManager::POWER_STATE_STANDBY_DEEP_SLEEP == cecPowerState))
+            if(!(WPEFramework::Exchange::IPowerManager::POWER_STATE_STANDBY_DEEP_SLEEP == cecPowerState.load()))
             {
 		    	//Wait for mutex signal here to continue the worker thread again.
 		    	pthread_cond_wait(&(_instance->m_condSigUpdate), &(_instance->m_lockUpdate));

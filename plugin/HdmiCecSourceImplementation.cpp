@@ -1662,11 +1662,9 @@ namespace WPEFramework
                 {
                     keyInfo.logicalAddr = -1;
                     keyInfo.keyCode = -1;
-                    {
-                        // Wait for a message to be added to the queue
-                        std::unique_lock<std::mutex> lk(_instance->m_sendKeyEventMutex);
-                        _instance->m_sendKeyCV.wait(lk, []{return (_instance->m_sendKeyEventThreadRun == true);});
-                    }
+                    // Wait for a message to be added to the queue
+                    std::unique_lock<std::mutex> lk(_instance->m_sendKeyEventMutex);
+                    _instance->m_sendKeyCV.wait(lk, []{return (_instance->m_sendKeyEventThreadRun == true);});
 
                     if (_instance->m_sendKeyEventThreadExit == true)
                     {

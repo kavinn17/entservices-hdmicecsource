@@ -380,75 +380,118 @@ namespace WPEFramework
     {
         LOGINFO("Configure");
         ASSERT(service != nullptr);
+        LOGWARN("1");
         PowerState pwrStateCur = WPEFramework::Exchange::IPowerManager::POWER_STATE_UNKNOWN;
+        LOGWARN("2");
         PowerState pwrStatePrev = WPEFramework::Exchange::IPowerManager::POWER_STATE_UNKNOWN;
+        LOGWARN("3");
         Core::hresult res = Core::ERROR_GENERAL;
+        LOGWARN("4");
         string msg;
+        LOGWARN("5");
         if (Utils::IARM::init()) {
+            LOGWARN("6");
             //Initialize cecEnableStatus to false in ctor
             cecEnableStatus = false;
+            LOGWARN("7");
 
             logicalAddressDeviceType = "None";
+            LOGWARN("8");
             logicalAddress = 0xFF;
+            LOGWARN("9");
 
             //CEC plugin functionalities will only work if CECmgr is available. If plugin Initialize failure upper layer will call dtor directly.
             InitializePowerManager(service);
+            LOGWARN("10");
 
             // load persistence setting
             loadSettings();
+            LOGWARN("11");
             try
             {
                 //TODO(MROLLINS) this is probably per process so we either need to be running in our own process or be carefull no other plugin is calling it
                 device::Manager::Initialize();
+                LOGWARN("12");
                 device::Host::getInstance().Register(baseInterface<device::Host::IDisplayDeviceEvents>(), "WPE::CecSource");
+                LOGWARN("13");
 
                 std::string strVideoPort = device::Host::getInstance().getDefaultVideoPortName();
+                LOGWARN("14");
                 device::VideoOutputPort vPort = device::Host::getInstance().getVideoOutputPort(strVideoPort.c_str());
+                LOGWARN("15");
                 if (vPort.isDisplayConnected())
                 {
+                    LOGWARN("16");
                     std::vector<uint8_t> edidVec;
+                    LOGWARN("17");
                     vPort.getDisplay().getEDIDBytes(edidVec);
+                    LOGWARN("18");
                     //Set LG vendor id if connected with LG TV
-                    if(edidVec.at(8) == 0x1E && edidVec.at(9) == 0x6D)
-                    {
-                        isLGTvConnected = true;
-                    }
+                    //if(edidVec.at(8) == 0x1E && edidVec.at(9) == 0x6D)
+                    //{
+                    //    isLGTvConnected = true;
+                    //    LOGWARN("19");
+                    //}
                     LOGINFO("manufacturer byte from edid :%x: %x  isLGTvConnected :%d",edidVec.at(8),edidVec.at(9),isLGTvConnected);
+                    LOGWARN("20");
+                }
+                else
+                {
+                    LOGWARN("21");
                 }
              }
              catch(...)
              {
                  LOGWARN("Exception in getting edid info .\r\n");
+                 LOGWARN("E1");
              }
 
              // get power state:
              ASSERT (_powerManagerPlugin);
+             LOGWARN("22");
              if (_powerManagerPlugin){
+                 LOGWARN("23");
                  res = _powerManagerPlugin->GetPowerState(pwrStateCur, pwrStatePrev);
+                 LOGWARN("24");
                  if (Core::ERROR_NONE == res)
                  {
                      powerState = (pwrStateCur == WPEFramework::Exchange::IPowerManager::POWER_STATE_ON)?0:1 ;
                      LOGINFO("Current state is PowerManagerPlugin: (%d) powerState :%d \n",pwrStateCur,powerState);
+                     LOGWARN("25");
                  }
+             }
+             else
+             {
+                 LOGWARN("E2");
              }
 
              if (cecSettingEnabled)
              {
+                LOGWARN("26");
                 try
                 {
                     CECEnable();
+                    LOGWARN("27");
                 }
                 catch(...)
                 {
                     LOGWARN("Exception while enabling CEC settings .\r\n");
+                    LOGWARN("E3");
                 }
+             }
+             else
+             {
+                LOGWARN("28");
              }
         } else {
             msg = "IARM bus is not available";
+            LOGWARN("29");
             LOGERR("IARM bus is not available. Failed to activate HdmiCecSource Plugin");
         }
         ASSERT(_powerManagerPlugin);
+        LOGWARN("30");
         registerEventHandlers();
+        LOGWARN("31");
         return Core::ERROR_NONE;
     }
 

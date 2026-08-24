@@ -1634,7 +1634,9 @@ namespace WPEFramework
 			    pthread_cond_wait(&(_instance->m_condSig), &(_instance->m_lock));
             }
             else{
+                pthread_mutex_unlock(&(_instance->m_lock));
                 usleep(10000); //sleep for 10 milli sec
+                pthread_mutex_lock(&(_instance->m_lock));
             }
 
 		}

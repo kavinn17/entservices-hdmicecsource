@@ -68,6 +68,8 @@
 #define CEC_SETTING_OSD_NAME "cecOSDName"
 #define CEC_SETTING_VENDOR_ID "cecVendorId"
 
+#include <atomic>
+
 enum {
     DEVICE_POWER_STATE_ON = 0,
     DEVICE_POWER_STATE_OFF = 1
@@ -83,7 +85,7 @@ static std::atomic<int32_t> powerState{DEVICE_POWER_STATE_OFF};
 static PowerStatus tvPowerState(PowerStatus::POWER_STATUS_NOT_KNOWN);
 static bool isDeviceActiveSource = false;
 static bool isLGTvConnected = false;
-static std::atomic<PowerState> cecPowerState{WPEFramework::Exchange::IPowerManager::ON};
+static std::atomic<PowerState> cecPowerState{WPEFramework::Exchange::IPowerManager::POWER_STATE_ON};
 
 #define KEY_UNSUPPORTED 0xFF
 

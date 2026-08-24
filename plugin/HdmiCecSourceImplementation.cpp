@@ -457,8 +457,9 @@ namespace WPEFramework
                  res = _powerManagerPlugin->GetPowerState(pwrStateCur, pwrStatePrev);
                  if (Core::ERROR_NONE == res)
                  {
-                     powerState.store((pwrStateCur == WPEFramework::Exchange::IPowerManager::POWER_STATE_ON)?DEVICE_POWER_STATE_ON:DEVICE_POWER_STATE_OFF);
-                     LOGINFO("Current state is PowerManagerPlugin: (%d) powerState :%d \n",pwrStateCur,powerState.load());
+                      cecPowerState.store(pwrStateCur);
+                      powerState.store((pwrStateCur == WPEFramework::Exchange::IPowerManager::POWER_STATE_ON)?DEVICE_POWER_STATE_ON:DEVICE_POWER_STATE_OFF);
+                      LOGINFO("Current state is PowerManagerPlugin: (%d) powerState :%d \n",pwrStateCur,powerState.load());
                  }
              }
 

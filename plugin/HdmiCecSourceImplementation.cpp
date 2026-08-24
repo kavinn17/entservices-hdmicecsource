@@ -68,6 +68,8 @@
 #define CEC_SETTING_OSD_NAME "cecOSDName"
 #define CEC_SETTING_VENDOR_ID "cecVendorId"
 
+#include <atomic>
+
 enum {
     DEVICE_POWER_STATE_ON = 0,
     DEVICE_POWER_STATE_OFF = 1

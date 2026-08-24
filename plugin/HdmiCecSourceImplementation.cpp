@@ -805,6 +805,10 @@ namespace WPEFramework
             }
             else
                 powerState.store(DEVICE_POWER_STATE_OFF);
+
+            pthread_mutex_lock(&m_lock);
+            pthread_cond_signal(&m_condSig);   // ← unblock the wait so the thread can check exit flag
+            pthread_mutex_unlock(&m_lock);
        }
 
        void HdmiCecSourceImplementation::resumeCecStack()
@@ -1079,9 +1083,6 @@ namespace WPEFramework
                 // Ensure any background threads know initialization failed.
                 m_updateThreadExit = true;
                 m_pollThreadExit = true;
-                pthread_mutex_lock(&m_lock);
-                pthread_cond_signal(&m_condSig);   // ← unblock the wait so the thread can check exit flag
-                pthread_mutex_unlock(&m_lock);
                 // Rollback sendKeyEvent thread
                 {
                     m_sendKeyEventThreadExit = true;

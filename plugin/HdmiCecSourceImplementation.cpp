@@ -818,17 +818,19 @@ namespace WPEFramework
         {
             try {
                 getLogicalAddress();
-                if (smConnection && logicalAddress.toInt() != LogicalAddress::UNREGISTERED) {
-                    // Re-announce physical address and vendor ID on bus
-                    smConnection->sendTo(LogicalAddress(LogicalAddress::BROADCAST),
-                        MessageEncoder().encode(
-                            ReportPhysicalAddress(physical_addr, logicalAddress.toInt())));
-                    smConnection->sendTo(LogicalAddress(LogicalAddress::BROADCAST),
-                        MessageEncoder().encode(DeviceVendorID(
-                            isLGTvConnected ? lgVendorId : appVendorId)));
-                    // Refresh TV power status
-                    smConnection->sendTo(LogicalAddress::TV,
-                        MessageEncoder().encode(GiveDevicePowerStatus()));
+                if(cecEnableStatus){
+                    if (smConnection && logicalAddress.toInt() != LogicalAddress::UNREGISTERED) {
+                        // Re-announce physical address and vendor ID on bus
+                        smConnection->sendTo(LogicalAddress(LogicalAddress::BROADCAST),
+                            MessageEncoder().encode(
+                                ReportPhysicalAddress(physical_addr, logicalAddress.toInt())));
+                        smConnection->sendTo(LogicalAddress(LogicalAddress::BROADCAST),
+                            MessageEncoder().encode(DeviceVendorID(
+                                isLGTvConnected ? lgVendorId : appVendorId)));
+                        // Refresh TV power status
+                        smConnection->sendTo(LogicalAddress::TV,
+                            MessageEncoder().encode(GiveDevicePowerStatus()));
+                    }
                 }
             } catch (...) {
                 LOGWARN("CEC resume stack revalidation failed — will retry on next hot-plug");
@@ -1685,9 +1687,10 @@ namespace WPEFramework
     	            _instance->sendKeyPressEvent(keyInfo.logicalAddr,_instance->getUIKeyCode(keyInfo.keyCode));
 	                _instance->sendKeyReleaseEvent(keyInfo.logicalAddr);
                 }
-                else{
-                usleep(10000); //sleep for 10 milli sec
-            }
+                else
+                {
+                    usleep(10000); //sleep for 10 milli sec
+                }
 
             }
 	    LOGINFO("%s: Thread exited", __FUNCTION__);

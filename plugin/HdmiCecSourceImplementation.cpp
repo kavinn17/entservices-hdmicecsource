@@ -1681,6 +1681,9 @@ namespace WPEFramework
     	            _instance->sendKeyPressEvent(keyInfo.logicalAddr,_instance->getUIKeyCode(keyInfo.keyCode));
 	                _instance->sendKeyReleaseEvent(keyInfo.logicalAddr);
                 }
+                else{
+                usleep(10000); //sleep for 10 milli sec
+            }
 
             }
 	    LOGINFO("%s: Thread exited", __FUNCTION__);
@@ -1750,7 +1753,11 @@ namespace WPEFramework
 		    		}
 		    	}
             }
-
+            else{
+                pthread_mutex_unlock(&(_instance->m_lockUpdate));
+                usleep(10000); //sleep for 10 milli sec
+                pthread_mutex_lock(&(_instance->m_lockUpdate));
+            }
 		}
 		pthread_mutex_unlock(&(_instance->m_lockUpdate));
 	        LOGINFO("%s: Thread exited", __FUNCTION__);

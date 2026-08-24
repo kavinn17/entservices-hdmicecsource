@@ -807,9 +807,11 @@ namespace WPEFramework
             else
                 powerState.store(DEVICE_POWER_STATE_OFF);
 
-            pthread_mutex_lock(&m_lock);
-            pthread_cond_signal(&m_condSig);   // ← unblock the wait so the thread can check exit flag
-            pthread_mutex_unlock(&m_lock);
+            if (cecEnableStatus) {
+                pthread_mutex_lock(&m_lock);
+                pthread_cond_signal(&m_condSig);
+                pthread_mutex_unlock(&m_lock);
+            }
        }
 
        void HdmiCecSourceImplementation::resumeCecStack()

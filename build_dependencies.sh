@@ -52,6 +52,10 @@ git clone --branch support/AIDL --depth 1 https://github.com/rdkcentral/hdmicec.
 git clone --depth 1 https://github.com/rdkcentral/iarmbus.git
 git clone --branch 6.0.0 --depth 1 https://github.com/rdkcentral/rdk-halif-device_settings.git
 git clone --branch develop --depth 1 https://github.com/rdkcentral/devicesettings.git devicesettings-src
+# Reuse the maintained vDevice DeviceSettings stubs from the AIDL branch.
+git clone --branch topic/AIDL_dev --depth 1 --filter=blob:none --sparse \
+    https://github.com/rdkcentral/entservices-hdmicecsource.git hdmicecsource-aidl-stubs
+git -C hdmicecsource-aidl-stubs sparse-checkout set stubs
 
 ############################
 # Build Thunder-Tools
@@ -231,86 +235,37 @@ EOF
 gcc -shared -o "$STUB_LIB/libtelemetry_msgsender.so" /tmp/stub_telemetry.c -Wl,-soname,libtelemetry_msgsender.so.0
 
 ############################
-# Build DeviceSettings compatibility stubs as STATIC archives.
-#
-# The guest does not provide libds/libdshalcli/libdshal. Keep the functional
-# test stub linked into the plugin and never create a DS shared object.
+# Build maintained DeviceSettings compatibility stubs as STATIC archives.
+# The guest does not provide libds/libdshalcli/libdshal, so do not create a
+# DS shared object or copy a DS library into the guest.
 echo "======================================================================================"
 echo "Building static DeviceSettings stubs"
-cat > /tmp/stub_ds.cpp << 'EOF'
-#include <cstdint>
-#include <string>
-#include <vector>
+UPSTREAM_STUB_DIR="$GITHUB_WORKSPACE/hdmicecsource-aidl-stubs/stubs"
+[[ -f "$UPSTREAM_STUB_DIR/devicesettings-stub.cpp" ]] || {
+    echo "ERROR: upstream devicesettings-stub.cpp is unavailable" >&2
+    exit 1
+}
+[[ -f "$UPSTREAM_STUB_DIR/dshal-stub.cpp" ]] || {
+    echo "ERROR: upstream dshal-stub.cpp is unavailable" >&2
+    exit 1
+}
 
-typedef int dsError_t;
-typedef int dsDisplayEvent_t;
+mkdir -p "$INSTALL_INC/rdk/ds-stubs"
+cp -f "$UPSTREAM_STUB_DIR"/*.h "$UPSTREAM_STUB_DIR"/*.hpp "$INSTALL_INC/rdk/ds-stubs/" 2>/dev/null || true
 
-namespace device {
-
-class Manager {
-public:
-    static void Initialize();
-    static void DeInitialize();
-};
-void Manager::Initialize() {}
-void Manager::DeInitialize() {}
-
-class VideoOutputPort {
-public:
-    class Display {
-    public:
-        void getEDIDBytes(std::vector<uint8_t>& edid) const;
-        virtual ~Display();
-    };
-
-    virtual ~VideoOutputPort();
-    const Display& getDisplay();
-    bool isDisplayConnected() const;
-};
-
-VideoOutputPort::Display::~Display() {}
-void VideoOutputPort::Display::getEDIDBytes(std::vector<uint8_t>& edid) const { (void)edid; }
-VideoOutputPort::~VideoOutputPort() {}
-const VideoOutputPort::Display& VideoOutputPort::getDisplay() { static Display display; return display; }
-bool VideoOutputPort::isDisplayConnected() const { return false; }
-
-class Host {
-public:
-    struct IDisplayDeviceEvents {
-        virtual ~IDisplayDeviceEvents() = default;
-        virtual void OnDisplayHDMIHotPlug(dsDisplayEvent_t displayEvent);
-    };
-
-    static Host& getInstance();
-    VideoOutputPort& getVideoOutputPort(const std::string& name);
-    std::string getDefaultVideoPortName();
-    dsError_t Register(IDisplayDeviceEvents* listener, const std::string& clientName = "");
-    dsError_t UnRegister(IDisplayDeviceEvents* listener);
-};
-
-void Host::IDisplayDeviceEvents::OnDisplayHDMIHotPlug(dsDisplayEvent_t displayEvent) { (void)displayEvent; }
-Host& Host::getInstance() { static Host host; return host; }
-VideoOutputPort& Host::getVideoOutputPort(const std::string& name) { (void)name; static VideoOutputPort port; return port; }
-std::string Host::getDefaultVideoPortName() { return "HDMI0"; }
-dsError_t Host::Register(IDisplayDeviceEvents* listener, const std::string& clientName) { (void)listener; (void)clientName; return 0; }
-dsError_t Host::UnRegister(IDisplayDeviceEvents* listener) { (void)listener; return 0; }
-
-} // namespace device
-
-extern "C" void __ds_stub(void) {}
-EOF
-
-g++ -c -fPIC -g -std=c++17 -o /tmp/stub_ds.o /tmp/stub_ds.cpp
-ar rcs "$STUB_LIB/libds.a" /tmp/stub_ds.o
+g++ -c -fPIC -g -std=c++17 -I"$INSTALL_INC/rdk/ds-stubs" \
+    -o /tmp/devicesettings-stub.o "$UPSTREAM_STUB_DIR/devicesettings-stub.cpp"
+ar rcs "$STUB_LIB/libds.a" /tmp/devicesettings-stub.o
 ranlib "$STUB_LIB/libds.a"
+
+g++ -c -fPIC -g -std=c++17 -I"$INSTALL_INC/rdk/ds-stubs" \
+    -o /tmp/dshal-stub.o "$UPSTREAM_STUB_DIR/dshal-stub.cpp"
+ar rcs "$STUB_LIB/libdshal.a" /tmp/dshal-stub.o
+ranlib "$STUB_LIB/libdshal.a"
 
 echo "void __dshalcli_stub(void){}" | gcc -c -fPIC -g -x c - -o /tmp/dshalcli_stub.o
 ar rcs "$STUB_LIB/libdshalcli.a" /tmp/dshalcli_stub.o
 ranlib "$STUB_LIB/libdshalcli.a"
-
-echo "void __dshal_stub(void){}" | gcc -c -fPIC -g -x c - -o /tmp/dshal_stub.o
-ar rcs "$STUB_LIB/libdshal.a" /tmp/dshal_stub.o
-ranlib "$STUB_LIB/libdshal.a"
 
 echo "Created static DS archives:"
 ls -lh "$STUB_LIB/libds.a" "$STUB_LIB/libdshalcli.a" "$STUB_LIB/libdshal.a"
@@ -345,7 +300,7 @@ done
 echo "--- Stub library verification ---"
 ls -1 "$INSTALL_LIB/build-stubs"/lib{ds,dshalcli,dshal}.a \
       "$INSTALL_LIB/build-stubs"/lib{RCEC,RCECOSHal,IARMBus,telemetry_msgsender}.so 2>&1
-echo "--- libds.a exported device:: symbols (expect hundreds, not <20) ---"
+echo "--- libds.a exported device:: symbols ---"
 nm -C "$INSTALL_LIB/build-stubs/libds.a" 2>/dev/null | grep -c 'device::' || true
 echo "---"
 

@@ -36,7 +36,7 @@ cd "${GITHUB_WORKSPACE}"
 # undefined symbol errors if the QEMU image ships a different Thunder ABI.
 sed -i 's/CXX_STANDARD 11/CXX_STANDARD 17/g' plugin/CMakeLists.txt
 
-# Verify real headers were installed by build_dependencies.sh
+# Verify real platform headers and upstream AIDL stub headers were installed.
 echo "--- Installed header verification ---"
 for h in rdk/ds/manager.hpp rdk/halif/ds-hal/dsTypes.h rdk/iarmbus/libIARM.h \
          ccec/include/ccec/Connection.hpp osal/include/osal/Mutex.hpp \
@@ -65,8 +65,8 @@ cmake -G Ninja -S "${GITHUB_WORKSPACE}" -B build/entservices-hdmicecsource \
   -DCOMCAST_CONFIG=OFF \
   -DRDK_SERVICES_COVERITY=ON \
   -DPLUGIN_HDMICECSOURCE=ON \
-  -DDS_INCLUDE_DIRS:PATH="${INCPFX}/rdk/ds" \
-  -DDSHAL_INCLUDE_DIRS:PATH="${INCPFX}/rdk/halif/ds-hal" \
+  -DDS_INCLUDE_DIRS:PATH="${INCPFX}/rdk/ds-stubs" \
+  -DDSHAL_INCLUDE_DIRS:PATH="${INCPFX}/rdk/ds-stubs" \
   -DDSRPC_INCLUDE_DIRS:PATH="${INCPFX}" \
   -DDS_LIBRARIES:STRING="${LIBPFX}/libds.a;${LIBPFX}/libdshalcli.a;${LIBPFX}/libdshal.a" \
   -DDSHAL_LIBRARIES:FILEPATH="${LIBPFX}/libdshal.a" \

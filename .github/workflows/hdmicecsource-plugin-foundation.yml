@@ -108,8 +108,8 @@ jobs:
           }
 
           # Collect runtime libraries that plugin may need at load time.
-          # DS archives are linked into the plugin and must never be deployed. Exclude
-          # any matching shared library as a guard against future build changes.
+          # DS test stubs are statically linked into the implementation plugin;
+          # never deploy DS shared libraries even if a future build produces them.
           # Exclude ALL libWPEFramework* libs — they are already in the QEMU image and
           # deploying any version from this build causes ABI mismatch SEGV on restart.
           find install/usr/lib -maxdepth 1 \( -type f -o -type l \) -name '*.so*' \

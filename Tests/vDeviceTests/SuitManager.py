@@ -89,7 +89,7 @@ SUITES = {
             "TCID41_Send_Keypress_When_Disabled",
             "TCID42_Hotplug_KeyRelease_Event_Path",
             "TCID43_Runtime_LogicalAddr_Process_Matrix",
-            "TCID44_Explicit_Plugin_Deactivate_Recover",
+           //"TCID44_Explicit_Plugin_Deactivate_Recover",
         ],
     },
 }

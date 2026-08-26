@@ -444,7 +444,7 @@ namespace WPEFramework
         {
             auto* vp = DSHelper::AcquireSubInterface<Exchange::IDeviceSettingsVideoPort>();
             if (vp != nullptr) {
-                vp->Register(&_dsVideoPortNotification);
+                vp->Register("HdmiCecSource", &_dsVideoPortNotification);
                 vp->Release();
             } else {
                 LOGERR("OnDeviceSettingsActivated: IDeviceSettingsVideoPort not available");
@@ -466,7 +466,7 @@ namespace WPEFramework
                     LOGINFO("OnDeviceSettingsActivated: cached _displayHandle=%d", _displayHandle);
                 }
                 // Register for HDMI hotplug (both connect and disconnect events)
-                disp->Register(&_dsDisplayHotPlugNotification);
+                disp->Register("HdmiCecSource", &_dsDisplayHotPlugNotification);
                 disp->Release();
             }
         }
@@ -798,6 +798,19 @@ namespace WPEFramework
             }
             else
                 powerState = 1;
+       }
+
+       void HdmiCecSourceImplementation::dispatchEvent(Event event, int connectStatus)
+       {
+            Core::IWorkerPool::Instance().Submit(HotPlugJob::Create(this, event, connectStatus));
+       }
+
+       void HdmiCecSourceImplementation::Dispatch(Event event, int connectStatus)
+       {
+            if (!HdmiCecSourceImplementation::_instance) return;
+            if (event == EV_HOTPLUG) {
+                _instance->onHdmiHotPlug(connectStatus);
+            }
        }
 
        void HdmiCecSourceImplementation::onHdmiHotPlug(int connectStatus)

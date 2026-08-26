@@ -229,6 +229,30 @@ namespace WPEFramework {
                 INTERFACE_ENTRY(Exchange::IConfiguration)
             END_INTERFACE_MAP
 
+            enum Event { EV_HOTPLUG };
+
+            // Job dispatched to the worker pool for every HDMI hot-plug event.
+            // Calls Dispatch(Event, connectStatus) on the worker thread.
+            class EXTERNAL HotPlugJob : public Core::IDispatch {
+            protected:
+                HotPlugJob(HdmiCecSourceImplementation* impl, Event event, int connectStatus)
+                    : _impl(impl), _event(event), _connectStatus(connectStatus)
+                { if (_impl != nullptr) _impl->AddRef(); }
+            public:
+                HotPlugJob() = delete;
+                HotPlugJob(const HotPlugJob&) = delete;
+                HotPlugJob& operator=(const HotPlugJob&) = delete;
+                ~HotPlugJob() { if (_impl != nullptr) _impl->Release(); }
+                static Core::ProxyType<Core::IDispatch> Create(HdmiCecSourceImplementation* impl, Event event, int connectStatus) {
+                    return Core::ProxyType<Core::IDispatch>(Core::ProxyType<HotPlugJob>::Create(impl, event, connectStatus));
+                }
+                void Dispatch() override { _impl->Dispatch(_event, _connectStatus); }
+            private:
+                HdmiCecSourceImplementation* _impl;
+                Event _event;
+                int _connectStatus;
+            };
+
         private:
             template <typename T>
             T* baseInterface()
@@ -264,7 +288,7 @@ namespace WPEFramework {
                 void OnResolutionPostChange(
                     const Exchange::IDeviceSettingsVideoPort::ResolutionChange& /*res*/) override
                 {
-                    _parent.onHdmiHotPlug(0 /* HDMI_HOT_PLUG_EVENT_CONNECTED */);
+                    _parent.dispatchEvent(EV_HOTPLUG, 0 /* HDMI_HOT_PLUG_EVENT_CONNECTED */);
                 }
 
                 BEGIN_INTERFACE_MAP(DSVideoPortNotification)
@@ -295,10 +319,9 @@ namespace WPEFramework {
                 void OnDisplayHDMIHotPlug(
                     const Exchange::IDeviceSettingsDisplay::DisplayEvent displayEvent) override
                 {
-                    _parent.onHdmiHotPlug(
+                    _parent.dispatchEvent(EV_HOTPLUG,
                         (displayEvent == Exchange::IDeviceSettingsDisplay::DS_DISPLAY_EVENT_CONNECTED)
-                            ? 0  /* HDMI_HOT_PLUG_EVENT_CONNECTED */
-                            : 1  /* disconnected */);
+                            ? 0 : 1);
                 }
 
                 BEGIN_INTERFACE_MAP(DSDisplayHotPlugNotification)
@@ -365,6 +388,8 @@ namespace WPEFramework {
             void InitializeIARM();
             void DeinitializeIARM();
             void onHdmiHotPlug(int connectStatus);
+            void dispatchEvent(Event event, int connectStatus);
+            void Dispatch(Event event, int connectStatus);
             bool loadSettings();
             void persistSettings(bool enableStatus);
             void persistOTPSettings(bool enableStatus);

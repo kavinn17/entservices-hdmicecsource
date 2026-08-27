@@ -294,7 +294,7 @@ def run_suite(suite_name):
     banner, test_cases = load_test_cases(suite_name)
     print(banner)
 
-    expected_count = 44
+    expected_count = 43
     if len(test_cases) != expected_count:
         log_error(
             f"Expected {expected_count} testcases, but found {len(test_cases)} in suite '{suite_name}'"

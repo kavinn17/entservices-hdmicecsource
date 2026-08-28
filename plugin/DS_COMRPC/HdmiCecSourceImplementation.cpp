@@ -394,7 +394,7 @@ namespace WPEFramework
             // COM-RPC path: open DeviceSettings link.
             // Display connectivity + EDID queries are handled in
             // OnDeviceSettingsActivated() once DeviceSettings is ready.
-            DSHelper::Open(service);
+            DSHelper::Open(service, "HdmiCecSource");
 
             // get power state:
             ASSERT (_powerManagerPlugin);

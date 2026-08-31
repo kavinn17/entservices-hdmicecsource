@@ -21,6 +21,8 @@ set -x
 set -e
 ##############################
 GITHUB_WORKSPACE="${PWD}"
+C_COMPILER="${CC:-gcc}"
+CXX_COMPILER="${CXX:-g++}"
 ls -la ${GITHUB_WORKSPACE}
 cd ${GITHUB_WORKSPACE}
 
@@ -225,14 +227,14 @@ IARM_Result_t IARM_Bus_RegisterEventHandler(const char *o, int e, void *h) { ret
 IARM_Result_t IARM_Bus_UnRegisterEventHandler(const char *o, int e) { return 0; }
 IARM_Result_t IARM_Bus_Call(const char *o, const char *m, void *a, size_t s) { return 0; }
 EOF
-gcc -shared -o "$STUB_LIB/libIARMBus.so" /tmp/stub_IARMBus.c -Wl,-soname,libIARMBus.so.0
+"$C_COMPILER" -shared -o "$STUB_LIB/libIARMBus.so" /tmp/stub_IARMBus.c -Wl,-soname,libIARMBus.so.0
 
 # telemetry stub — exports t2_event_s used when ENABLE_TELEMETRY_LOGGING is set
 cat > /tmp/stub_telemetry.c << 'EOF'
 void t2_event_s(const char* marker, const char* value) { (void)marker; (void)value; }
 void t2_event_d(const char* marker, int value) { (void)marker; (void)value; }
 EOF
-gcc -shared -o "$STUB_LIB/libtelemetry_msgsender.so" /tmp/stub_telemetry.c -Wl,-soname,libtelemetry_msgsender.so.0
+"$C_COMPILER" -shared -o "$STUB_LIB/libtelemetry_msgsender.so" /tmp/stub_telemetry.c -Wl,-soname,libtelemetry_msgsender.so.0
 
 ############################
 # Build maintained DeviceSettings compatibility stubs as STATIC archives.
@@ -253,17 +255,17 @@ UPSTREAM_STUB_DIR="$GITHUB_WORKSPACE/hdmicecsource-aidl-stubs/stubs"
 mkdir -p "$INSTALL_INC/rdk/ds-stubs"
 cp -f "$UPSTREAM_STUB_DIR"/*.h "$UPSTREAM_STUB_DIR"/*.hpp "$INSTALL_INC/rdk/ds-stubs/" 2>/dev/null || true
 
-g++ -c -fPIC -g -std=c++17 -I"$INSTALL_INC/rdk/ds-stubs" \
+"$CXX_COMPILER" -c -fPIC -g -std=c++17 -I"$INSTALL_INC/rdk/ds-stubs" \
     -o /tmp/devicesettings-stub.o "$UPSTREAM_STUB_DIR/devicesettings-stub.cpp"
 ar rcs "$STUB_LIB/libds.a" /tmp/devicesettings-stub.o
 ranlib "$STUB_LIB/libds.a"
 
-g++ -c -fPIC -g -std=c++17 -I"$INSTALL_INC/rdk/ds-stubs" \
+"$CXX_COMPILER" -c -fPIC -g -std=c++17 -I"$INSTALL_INC/rdk/ds-stubs" \
     -o /tmp/dshal-stub.o "$UPSTREAM_STUB_DIR/dshal-stub.cpp"
 ar rcs "$STUB_LIB/libdshal.a" /tmp/dshal-stub.o
 ranlib "$STUB_LIB/libdshal.a"
 
-echo "void __dshalcli_stub(void){}" | gcc -c -fPIC -g -x c - -o /tmp/dshalcli_stub.o
+echo "void __dshalcli_stub(void){}" | "$C_COMPILER" -c -fPIC -g -x c - -o /tmp/dshalcli_stub.o
 ar rcs "$STUB_LIB/libdshalcli.a" /tmp/dshalcli_stub.o
 ranlib "$STUB_LIB/libdshalcli.a"
 
@@ -284,7 +286,7 @@ for lib in RCEC RCECOSHal; do
     else
         soname="lib${lib}.so"
     fi
-    echo "void __${lib}_stub(void){}" | gcc -shared -o "$STUB_LIB/lib${lib}.so" \
+    echo "void __${lib}_stub(void){}" | "$C_COMPILER" -shared -o "$STUB_LIB/lib${lib}.so" \
         -x c - -Wl,-soname,"$soname"
 done
 

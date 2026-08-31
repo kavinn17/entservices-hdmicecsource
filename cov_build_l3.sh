@@ -54,8 +54,22 @@ echo "---"
 # a valid path so their NOTFOUND values don't poison include dirs lists.
 INCPFX="${GITHUB_WORKSPACE}/install/usr/include"
 LIBPFX="${GITHUB_WORKSPACE}/install/usr/lib/build-stubs"
+QEMU_CXX_RUNTIME_DIR="${QEMU_CXX_RUNTIME_DIR:-${GITHUB_WORKSPACE}/.qemu-cxx-runtime}"
+C_COMPILER="${CC:-gcc}"
+CXX_COMPILER="${CXX:-g++}"
+
+test -f "${QEMU_CXX_RUNTIME_DIR}/libstdc++.so"
+echo "Using C compiler: $C_COMPILER"
+"$C_COMPILER" --version | head -n 1
+echo "Using C++ compiler: $CXX_COMPILER"
+"$CXX_COMPILER" --version | head -n 1
+echo "Using QEMU libstdc++: ${QEMU_CXX_RUNTIME_DIR}/libstdc++.so"
+
+rm -rf build/entservices-hdmicecsource
 
 cmake -G Ninja -S "${GITHUB_WORKSPACE}" -B build/entservices-hdmicecsource \
+  -DCMAKE_C_COMPILER="$C_COMPILER" \
+  -DCMAKE_CXX_COMPILER="$CXX_COMPILER" \
   -DUSE_THUNDER_R4=ON \
   -DCMAKE_INSTALL_PREFIX="${GITHUB_WORKSPACE}/install/usr" \
   -DCMAKE_MODULE_PATH="${GITHUB_WORKSPACE}/install/tools/cmake" \
@@ -82,7 +96,7 @@ cmake -G Ninja -S "${GITHUB_WORKSPACE}" -B build/entservices-hdmicecsource \
   -DTELEMETRY_LIBRARIES:FILEPATH="${LIBPFX}/libtelemetry_msgsender.so" \
   -DTELEMETRY_INCLUDE_DIRS:PATH="${INCPFX}" \
   -DCMAKE_C_FLAGS="--coverage -g" \
-  -DCMAKE_SHARED_LINKER_FLAGS="--coverage" \
+  -DCMAKE_SHARED_LINKER_FLAGS="--coverage -L${QEMU_CXX_RUNTIME_DIR} -Wl,-rpath-link,${QEMU_CXX_RUNTIME_DIR}" \
   -DCMAKE_CXX_FLAGS="-DEXCEPTIONS_ENABLE=ON \
   --coverage -g \
   -Wall -Wno-unused-result -Wno-error=format \

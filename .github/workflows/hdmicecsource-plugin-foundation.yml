@@ -72,10 +72,36 @@ jobs:
           echo "qemu branch Tests/vDeviceTests contents:"
           ls /tmp/qemu-tests-branch/Tests/vDeviceTests/
 
+      - name: Prepare QEMU libstdc++ for linking
+        run: |
+          set -euo pipefail
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            gcc-11 \
+            g++-11
+
+          guest_cxx_runtime="$GITHUB_WORKSPACE/entservices-hdmicecsource/.qemu-cxx-runtime"
+          guest_cxx_archive="$GITHUB_WORKSPACE/entservices-hdmicecsource/libs/usr.tar.gz"
+          mkdir -p "$guest_cxx_runtime"
+          if tar -tzf "$guest_cxx_archive" >/dev/null 2>&1; then
+            tar -xzf "$guest_cxx_archive" -C "$guest_cxx_runtime"
+          else
+            tar -xf "$guest_cxx_archive" -C "$guest_cxx_runtime"
+          fi
+          test -f "$guest_cxx_runtime/libstdc++.so.6.0.29"
+          ln -sf libstdc++.so.6.0.29 "$guest_cxx_runtime/libstdc++.so"
+          echo "QEMU libstdc++ provided symbols:"
+          strings "$guest_cxx_runtime/libstdc++.so.6.0.29" \
+            | grep -oE 'GLIBCXX_[0-9.]+' \
+            | sort -Vu \
+            | tail -n 1
+
       - name: Build dependency stack
         working-directory: entservices-hdmicecsource
         run: |
-          bash -x build_dependencies.sh
+          export QEMU_CXX_RUNTIME_DIR="$PWD/.qemu-cxx-runtime"
+          export LIBRARY_PATH="$QEMU_CXX_RUNTIME_DIR${LIBRARY_PATH:+:$LIBRARY_PATH}"
+          CC=gcc-11 CXX=g++-11 bash -x build_dependencies.sh
 
       - name: Build HDMI CEC Source plugin
         working-directory: entservices-hdmicecsource
@@ -83,7 +109,9 @@ jobs:
           export CFLAGS="${CFLAGS:-} --coverage"
           export CXXFLAGS="${CXXFLAGS:-} --coverage"
           export LDFLAGS="${LDFLAGS:-} --coverage"
-          bash -x cov_build_l3.sh
+          export QEMU_CXX_RUNTIME_DIR="$PWD/.qemu-cxx-runtime"
+          export LIBRARY_PATH="$QEMU_CXX_RUNTIME_DIR${LIBRARY_PATH:+:$LIBRARY_PATH}"
+          CC=gcc-11 CXX=g++-11 bash -x cov_build_l3.sh
 
       - name: Collect built plugin artifacts
         id: plugin
@@ -130,14 +158,6 @@ jobs:
             exit 1
           fi
 
-          # The CI toolchain's libstdc++ may be newer than the guest image's;
-          # deploy it so GLIBCXX symbol versions required by the plugin resolve.
-          host_stdcxx="$(gcc -print-file-name=libstdc++.so 2>/dev/null || true)"
-          if [[ -n "$host_stdcxx" && -e "$host_stdcxx" ]]; then
-            real_stdcxx="$(readlink -f "$host_stdcxx")"
-            cp -f "$real_stdcxx" artifacts/runtime-libs/libstdc++.so.6
-          fi
-
           {
             echo "===== built plugin artifacts ====="
             for sofile in artifacts/plugins/*.so; do
@@ -145,6 +165,30 @@ jobs:
               ls -lh "$sofile"
               sha256sum "$sofile"
               ldd "$sofile" || true
+            done
+
+            echo "===== GLIBCXX requirements ====="
+            for library in \
+              libWPEFrameworkHdmiCecSource.so \
+              libWPEFrameworkHdmiCecSourceImplementation.so; do
+              sofile="artifacts/plugins/$library"
+              echo "--- $library ---"
+              readelf --version-info "$sofile" \
+                | grep -oE 'GLIBCXX_[0-9.]+' \
+                | sort -Vu \
+                || echo "  (no GLIBCXX requirements)"
+
+              maximum_glibcxx="$(readelf --version-info "$sofile" \
+                | grep -oE 'GLIBCXX_[0-9.]+' \
+                | sort -Vu \
+                | tail -n 1 || true)"
+              if [[ -n "$maximum_glibcxx" \
+                  && "$(printf '%s\n%s\n' GLIBCXX_3.4.29 "$maximum_glibcxx" \
+                    | sort -V \
+                    | tail -n 1)" != "GLIBCXX_3.4.29" ]]; then
+                echo "ERROR: $library requires GLIBCXX newer than the QEMU runtime" >&2
+                exit 1
+              fi
             done
 
             echo "===== collected runtime libraries ====="

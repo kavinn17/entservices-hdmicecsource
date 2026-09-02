@@ -36,6 +36,7 @@
 #include "UtilsSearchRDKProfile.h"
 
 #include <telemetry_busmessage_sender.h>
+#include <atomic>
 #include <chrono>
 
 #define HDMICECSOURCE_METHOD_SET_ENABLED "SetEnabled"
@@ -68,6 +69,7 @@
 #define CEC_SETTING_OTP_ENABLED "cecOTPEnabled"
 #define CEC_SETTING_OSD_NAME "cecOSDName"
 #define CEC_SETTING_VENDOR_ID "cecVendorId"
+#define FUNCTION_PROFILING_MARKER_FILE "/opt/hdmicecprof"
 
 static std::vector<uint8_t> defaultVendorId = {0x00,0x19,0xFB};
 static VendorID appVendorId = {defaultVendorId.at(0),defaultVendorId.at(1),defaultVendorId.at(2)};
@@ -89,12 +91,21 @@ namespace WPEFramework
 {
     namespace Plugin
     {
+        namespace {
+            std::atomic_bool functionProfilingEnabled { false };
+        }
+
         class ScopedFunctionProfiler {
         public:
             explicit ScopedFunctionProfiler(const char* functionName)
                 : _functionName(functionName)
-                , _entrySteady(std::chrono::steady_clock::now())
+                , _enabled(functionProfilingEnabled.load(std::memory_order_relaxed))
             {
+                if (!_enabled) {
+                    return;
+                }
+
+                _entrySteady = std::chrono::steady_clock::now();
                 const auto entryNow = std::chrono::system_clock::now();
                 const auto entryMs = std::chrono::duration_cast<std::chrono::milliseconds>(
                     entryNow.time_since_epoch()).count();
@@ -103,6 +114,10 @@ namespace WPEFramework
 
             ~ScopedFunctionProfiler()
             {
+                if (!_enabled) {
+                    return;
+                }
+
                 const auto exitNow = std::chrono::system_clock::now();
                 const auto exitMs = std::chrono::duration_cast<std::chrono::milliseconds>(
                     exitNow.time_since_epoch()).count();
@@ -117,6 +132,7 @@ namespace WPEFramework
 
         private:
             const char* _functionName;
+            bool _enabled;
             std::chrono::steady_clock::time_point _entrySteady;
         };
 
@@ -412,6 +428,11 @@ namespace WPEFramework
     {
         LOGINFO("Configure");
         ASSERT(service != nullptr);
+        Core::File profilingMarker(FUNCTION_PROFILING_MARKER_FILE);
+        const bool profilingEnabled = profilingMarker.Exists();
+        functionProfilingEnabled.store(profilingEnabled, std::memory_order_relaxed);
+        LOGINFO("Function profiling is %s", profilingEnabled ? "enabled" : "disabled");
+
         PowerState pwrStateCur = WPEFramework::Exchange::IPowerManager::POWER_STATE_UNKNOWN;
         PowerState pwrStatePrev = WPEFramework::Exchange::IPowerManager::POWER_STATE_UNKNOWN;
         Core::hresult res = Core::ERROR_GENERAL;

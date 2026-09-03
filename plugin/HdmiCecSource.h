@@ -26,7 +26,7 @@
 #include <thread>
 
 #undef Assert // this define from Connection.hpp conflicts with WPEFramework
-
+#include "HdmiCecVirtualRemote.h"
 #include "Module.h"
 
 #include "UtilsBIT.h"
@@ -178,6 +178,7 @@ namespace WPEFramework {
                 Core::Sink<Notification> _notification;
                 Exchange::IHdmiCecSource* _hdmiCecSource;
                 uint32_t _connectionId;
+				HdmiCecVirtualRemote _virtualRemote;
         };
 	} // namespace Plugin
 } // namespace WPEFramework

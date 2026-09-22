@@ -36,6 +36,7 @@
 #include "UtilsSearchRDKProfile.h"
 
 #include <telemetry_busmessage_sender.h>
+#include <linux/input.h>
 
 #define HDMICECSOURCE_METHOD_SET_ENABLED "SetEnabled"
 #define HDMICECSOURCE_METHOD_GET_ENABLED "GetEnabled"
@@ -68,16 +69,25 @@
 #define CEC_SETTING_OSD_NAME "cecOSDName"
 #define CEC_SETTING_VENDOR_ID "cecVendorId"
 
+
+#include <atomic>
+
+enum {
+    DEVICE_POWER_STATE_ON = 0,
+    DEVICE_POWER_STATE_OFF = 1
+};
+
 static std::vector<uint8_t> defaultVendorId = {0x00,0x19,0xFB};
 static VendorID appVendorId = {defaultVendorId.at(0),defaultVendorId.at(1),defaultVendorId.at(2)};
 static VendorID lgVendorId = {0x00,0xE0,0x91};
 static PhysicalAddress physical_addr = {0x0F,0x0F,0x0F,0x0F};
 static LogicalAddress logicalAddress = 0xF;
 static OSDName osdName = "TV Box";
-static int32_t powerState = 1;
+static std::atomic<int32_t> powerState{DEVICE_POWER_STATE_OFF};
 static PowerStatus tvPowerState(PowerStatus::POWER_STATUS_NOT_KNOWN);
 static bool isDeviceActiveSource = false;
 static bool isLGTvConnected = false;
+static std::atomic<PowerState> devicePowerState{WPEFramework::Exchange::IPowerManager::POWER_STATE_ON};
 
 #define KEY_UNSUPPORTED 0xFF
 
@@ -286,7 +296,7 @@ namespace WPEFramework
        {
              try
              { 
-                 conn.sendTo(header.from, MessageEncoder().encode(ReportPowerStatus(PowerStatus(powerState))));
+                 conn.sendTo(header.from, MessageEncoder().encode(ReportPowerStatus(PowerStatus(powerState.load()))));
              } 
              catch(...)
              {
@@ -351,6 +361,8 @@ namespace WPEFramework
     , msgFrameListener(nullptr)
     , _pwrMgrNotification(*this)
     , _registeredEventHandlers(false)
+    , _toolsPlugin(nullptr)
+    , _service(nullptr)
     {
         LOGWARN("ctor");
         HdmiCecSourceImplementation::_instance = this;
@@ -383,6 +395,17 @@ namespace WPEFramework
                _powerManagerPlugin->Unregister(_pwrMgrNotification.baseInterface<Exchange::IPowerManager::IModeChangedNotification>());
                _powerManagerPlugin.Reset();
            }
+           
+           // Cleanup Tools plugin
+           {
+               std::lock_guard<std::mutex> lock(_toolsPluginLock);
+               if(_toolsPlugin)
+               {
+                   _toolsPlugin->Release();
+                   _toolsPlugin = nullptr;
+               }
+           }
+           
            _registeredEventHandlers = false;
            try
            {
@@ -398,6 +421,31 @@ namespace WPEFramework
            }
     }
 
+    void HdmiCecSourceImplementation::initializeToolsPlugin(PluginHost::IShell* service)
+    {
+        std::lock_guard<std::mutex> lock(_toolsPluginLock);
+        
+        if (_toolsPlugin != nullptr) {
+            return;  // Already initialized
+        }
+
+        if (service == nullptr) {
+            LOGWARN("Service is null, cannot initialize Tools plugin");
+            return;
+        }
+
+        // Try to get Tools plugin using the correct WPEFramework API
+        // Use QueryInterfaceByCallsign to get the interface from the callsign
+        _toolsPlugin = service->QueryInterfaceByCallsign<Exchange::ITools>("org.rdk.Tools");
+        
+        if (_toolsPlugin != nullptr) {
+            LOGINFO("Successfully acquired ITools interface from Tools plugin");
+            _toolsPlugin->AddRef();
+        } else {
+            LOGDBG("Tools plugin (org.rdk.Tools) not available yet");
+        }
+    }
+
     Core::hresult HdmiCecSourceImplementation::Configure(PluginHost::IShell* service)
     {
         LOGINFO("Configure");
@@ -406,6 +454,10 @@ namespace WPEFramework
         PowerState pwrStatePrev = WPEFramework::Exchange::IPowerManager::POWER_STATE_UNKNOWN;
         Core::hresult res = Core::ERROR_GENERAL;
         string msg;
+        
+        // Store the service for later use
+        _service = service;
+        
         if (Utils::IARM::init()) {
             //Initialize cecEnableStatus to false in ctor
             cecEnableStatus = false;
@@ -415,6 +467,15 @@ namespace WPEFramework
 
             //CEC plugin functionalities will only work if CECmgr is available. If plugin Initialize failure upper layer will call dtor directly.
             InitializePowerManager(service);
+
+            // Initialize Tools plugin for uinput key event handling
+            // Note: Tools plugin may not be loaded yet, will try again on first key press
+            initializeToolsPlugin(service);
+            if (_toolsPlugin == nullptr) {
+                LOGWARN("Tools plugin not available at startup, will retry on first key press");
+            } else {
+                LOGINFO("Successfully initialized Tools plugin for uinput key event handling");
+            }
 
             // load persistence setting
             loadSettings();
@@ -449,8 +510,9 @@ namespace WPEFramework
                  res = _powerManagerPlugin->GetPowerState(pwrStateCur, pwrStatePrev);
                  if (Core::ERROR_NONE == res)
                  {
-                     powerState = (pwrStateCur == WPEFramework::Exchange::IPowerManager::POWER_STATE_ON)?0:1 ;
-                     LOGINFO("Current state is PowerManagerPlugin: (%d) powerState :%d \n",pwrStateCur,powerState);
+                      devicePowerState.store(pwrStateCur);
+                      powerState.store((pwrStateCur == WPEFramework::Exchange::IPowerManager::POWER_STATE_ON)?DEVICE_POWER_STATE_ON:DEVICE_POWER_STATE_OFF);
+                      LOGINFO("Current state is PowerManagerPlugin: (%d) powerState :%d \n",pwrStateCur,powerState.load());
                  }
              }
 
@@ -789,14 +851,44 @@ namespace WPEFramework
 
             LOGINFO("Event IARM_BUS_PWRMGR_EVENT_MODECHANGED: State Changed %d -- > %d\r",
                     currentState, newState);
+            devicePowerState.store(newState);
             if (WPEFramework::Exchange::IPowerManager::POWER_STATE_ON == newState)
             {
-                powerState = 0;
-                HdmiCecSourceImplementation::_instance->getLogicalAddress(); // get the updated LA after wakeup
+                powerState.store(DEVICE_POWER_STATE_ON);
+                resumeCecStack();
             }
             else
-                powerState = 1;
+                powerState.store(DEVICE_POWER_STATE_OFF);
+
+            if (cecEnableStatus) {
+                pthread_mutex_lock(&m_lock);
+                pthread_cond_signal(&m_condSig);
+                pthread_mutex_unlock(&m_lock);
+            }
        }
+
+       void HdmiCecSourceImplementation::resumeCecStack()
+        {
+            try {
+                getLogicalAddress();
+                if(cecEnableStatus){
+                    if (smConnection && logicalAddress.toInt() != LogicalAddress::UNREGISTERED) {
+                        // Re-announce physical address and vendor ID on bus
+                        smConnection->sendTo(LogicalAddress(LogicalAddress::BROADCAST),
+                            MessageEncoder().encode(
+                                ReportPhysicalAddress(physical_addr, logicalAddress.toInt())));
+                        smConnection->sendTo(LogicalAddress(LogicalAddress::BROADCAST),
+                            MessageEncoder().encode(DeviceVendorID(
+                                isLGTvConnected ? lgVendorId : appVendorId)));
+                        // Refresh TV power status
+                        smConnection->sendTo(LogicalAddress::TV,
+                            MessageEncoder().encode(GiveDevicePowerStatus()));
+                    }
+                }
+            } catch (...) {
+                LOGWARN("CEC resume stack revalidation failed — will retry on next hot-plug");
+            }
+        }
 
        void HdmiCecSourceImplementation::onHdmiHotPlug(int connectStatus)
        {
@@ -1581,21 +1673,32 @@ namespace WPEFramework
 		int i = 0;
 		pthread_mutex_lock(&(_instance->m_lock));//pthread_cond_wait should be mutex protected. //pthread_cond_wait will unlock the mutex and perfoms wait for the condition.
 		while (!_instance->m_pollThreadExit) {
-			bool isActivateUpdateThread = false;
-			LOGINFO("Starting cec device polling");
-			for(i=0; i< LogicalAddress::UNREGISTERED; i++ ) {
-				bool isConnected = _instance->pingDeviceUpdateList(i);
-				if (isConnected){
-					isActivateUpdateThread = isConnected;
-				}
+            if(!(WPEFramework::Exchange::IPowerManager::POWER_STATE_STANDBY_DEEP_SLEEP == devicePowerState.load())){
+			    bool isActivateUpdateThread = false;
+			    LOGINFO("Starting cec device polling");
+			    for(i=0; i< LogicalAddress::UNREGISTERED; i++ ) {
+			    	bool isConnected = _instance->pingDeviceUpdateList(i);
+			    	if (isConnected){
+			    		isActivateUpdateThread = isConnected;
+			    	}
+                    if(_instance->m_pollThreadExit || (WPEFramework::Exchange::IPowerManager::POWER_STATE_STANDBY_DEEP_SLEEP == devicePowerState.load()))
+                    {
+                        break;
+                    }
 
-			}
-			if (isActivateUpdateThread){
-				//i any of devices is connected activate thread update check
-				pthread_cond_signal(&(_instance->m_condSigUpdate));
-			}
-			//Wait for mutex signal here to continue the worker thread again.
-			pthread_cond_wait(&(_instance->m_condSig), &(_instance->m_lock));
+			    }
+			    if (isActivateUpdateThread){
+			    	//i any of devices is connected activate thread update check
+			    	pthread_cond_signal(&(_instance->m_condSigUpdate));
+			    }
+			    //Wait for mutex signal here to continue the worker thread again.
+			    pthread_cond_wait(&(_instance->m_condSig), &(_instance->m_lock));
+            }
+            else{
+                pthread_mutex_unlock(&(_instance->m_lock));
+                usleep(200000); //sleep for 200 milli sec
+                pthread_mutex_lock(&(_instance->m_lock));
+            }
 
 		}
 		pthread_mutex_unlock(&(_instance->m_lock));
@@ -1610,32 +1713,37 @@ namespace WPEFramework
 
             while(!_instance->m_sendKeyEventThreadExit)
             {
-                keyInfo.logicalAddr = -1;
-                keyInfo.keyCode = -1;
+                if(!(WPEFramework::Exchange::IPowerManager::POWER_STATE_STANDBY_DEEP_SLEEP == devicePowerState.load()))
                 {
+                    keyInfo.logicalAddr = -1;
+                    keyInfo.keyCode = -1;
                     // Wait for a message to be added to the queue
                     std::unique_lock<std::mutex> lk(_instance->m_sendKeyEventMutex);
                     _instance->m_sendKeyCV.wait(lk, []{return (_instance->m_sendKeyEventThreadRun == true);});
-                }
 
-                if (_instance->m_sendKeyEventThreadExit == true)
+                    if (_instance->m_sendKeyEventThreadExit == true)
+                    {
+                        LOGINFO(" threadSendKeyEvent Exiting");
+                        _instance->m_sendKeyEventThreadRun = false;
+                        break;
+                    }
+
+                    if (_instance->m_SendKeyQueue.empty()) {
+                        _instance->m_sendKeyEventThreadRun = false;
+                        continue;
+                    }
+
+                    keyInfo = _instance->m_SendKeyQueue.front();
+                    _instance->m_SendKeyQueue.pop();
+
+                    LOGINFO("sendRemoteKeyThread : logical addr:0x%x keyCode: 0x%x  queue size :%d \n",keyInfo.logicalAddr,keyInfo.keyCode,(int)_instance->m_SendKeyQueue.size());
+    	            _instance->sendKeyPressEvent(keyInfo.logicalAddr,_instance->getUIKeyCode(keyInfo.keyCode));
+	                _instance->sendKeyReleaseEvent(keyInfo.logicalAddr);
+                }
+                else
                 {
-                    LOGINFO(" threadSendKeyEvent Exiting");
-                    _instance->m_sendKeyEventThreadRun = false;
-                    break;
+                    usleep(200000); //sleep for 200 milli sec
                 }
-
-                if (_instance->m_SendKeyQueue.empty()) {
-                    _instance->m_sendKeyEventThreadRun = false;
-                    continue;
-                }
-
-                keyInfo = _instance->m_SendKeyQueue.front();
-                _instance->m_SendKeyQueue.pop();
-                
-                LOGINFO("sendRemoteKeyThread : logical addr:0x%x keyCode: 0x%x  queue size :%d \n",keyInfo.logicalAddr,keyInfo.keyCode,(int)_instance->m_SendKeyQueue.size());
-    	        _instance->sendKeyPressEvent(keyInfo.logicalAddr,_instance->getUIKeyCode(keyInfo.keyCode));
-	            _instance->sendKeyReleaseEvent(keyInfo.logicalAddr);
 
             }
 	    LOGINFO("%s: Thread exited", __FUNCTION__);
@@ -1650,58 +1758,71 @@ namespace WPEFramework
 		int i = 0;
 		pthread_mutex_lock(&(_instance->m_lockUpdate));//pthread_cond_wait should be mutex protected. //pthread_cond_wait will unlock the mutex and perfoms wait for the condition.
 		while (!_instance->m_updateThreadExit) {
-			//Wait for mutex signal here to continue the worker thread again.
-			pthread_cond_wait(&(_instance->m_condSigUpdate), &(_instance->m_lockUpdate));
+            if(!(WPEFramework::Exchange::IPowerManager::POWER_STATE_STANDBY_DEEP_SLEEP == devicePowerState.load()))
+            {
+		    	//Wait for mutex signal here to continue the worker thread again.
+		    	pthread_cond_wait(&(_instance->m_condSigUpdate), &(_instance->m_lockUpdate));
 
-			LOGINFO("Starting cec device update check");
-			for(i=0; ((i< LogicalAddress::UNREGISTERED)&&(!_instance->m_updateThreadExit)); i++ ) {
-				//If details are not updated. update now.
-				if (BIT_CHECK(HdmiCecSourceImplementation::_instance->deviceList[i].m_deviceInfoStatus, BIT_DEVICE_PRESENT))
-				{
-					int itr = 0;
-					bool retry = true;
-					int iCounter = 0;
-					for (itr = 0; ((itr<5)&&(retry)); itr++){
+		    	LOGINFO("Starting cec device update check");
+		    	for(i=0; ((i< LogicalAddress::UNREGISTERED)&&(!_instance->m_updateThreadExit)); i++ ) {
+		    		//If details are not updated. update now.
+		    		if (BIT_CHECK(HdmiCecSourceImplementation::_instance->deviceList[i].m_deviceInfoStatus, BIT_DEVICE_PRESENT))
+		    		{
+		    			int itr = 0;
+		    			bool retry = true;
+		    			int iCounter = 0;
+		    			for (itr = 0; ((itr<5)&&(retry)); itr++){
 
-						if (!HdmiCecSourceImplementation::_instance->deviceList[i].m_isOSDNameUpdated){
-							iCounter = 0;
-							while ((!_instance->m_updateThreadExit) && (iCounter < (2*10))) { //sleep for 2sec.
-								/* Delay allows CEC device response time as per HDMI-CEC specification before requesting OSD name */
-								/* coverity[sleep : FALSE] */
-								usleep (100 * 1000); //sleep for 100 milli sec
-								iCounter ++;
-							}
+		    				if (!HdmiCecSourceImplementation::_instance->deviceList[i].m_isOSDNameUpdated){
+		    					iCounter = 0;
+		    					while ((!_instance->m_updateThreadExit) && (iCounter < (2*10))) { //sleep for 2sec.
+		    						/* Delay allows CEC device response time as per HDMI-CEC specification before requesting OSD name */
+		    						/* coverity[sleep : FALSE] */
+		    						usleep (100 * 1000); //sleep for 100 milli sec
+		    						iCounter ++;
+		    					}
 
-							HdmiCecSourceImplementation::_instance->requestOsdName (i);
-							retry = true;
+		    					HdmiCecSourceImplementation::_instance->requestOsdName (i);
+		    					retry = true;
+		    				}
+		    				else {
+		    					retry = false;
+		    				}
+
+		    				if (!HdmiCecSourceImplementation::_instance->deviceList[i].m_isVendorIDUpdated){
+		    					iCounter = 0;
+		    					while ((!_instance->m_updateThreadExit) && (iCounter < (2*10))) { //sleep for 2sec.
+		    						/* Delay allows CEC device response time as per HDMI-CEC specification before requesting vendor ID */
+		    						/* coverity[sleep : FALSE] */
+		    						usleep (100 * 1000); //sleep for 100 milli sec
+		    						iCounter ++;
+		    					}
+
+		    					HdmiCecSourceImplementation::_instance->requestVendorID (i);
+		    					retry = true;
+		    				}
+
+                            if(_instance->m_updateThreadExit)
+                            {
+                                break;
+                            }
+		    			}
+						if (retry) {
+							LOGINFO("cec device: %d update time out", i);
 						}
-						else {
-							retry = false;
-						}
-
-						if (!HdmiCecSourceImplementation::_instance->deviceList[i].m_isVendorIDUpdated){
-							iCounter = 0;
-							while ((!_instance->m_updateThreadExit) && (iCounter < (2*10))) { //sleep for 2sec.
-								/* Delay allows CEC device response time as per HDMI-CEC specification before requesting vendor ID */
-								/* coverity[sleep : FALSE] */
-								usleep (100 * 1000); //sleep for 100 milli sec
-								iCounter ++;
-							}
-
-							HdmiCecSourceImplementation::_instance->requestVendorID (i);
-							retry = true;
-						}
-					}
-					if (retry){
-						LOGINFO("cec device: %d update time out", i);
-					}
-				}
-			}
-
-		}
+                    } 
+		        }
+            }
+            else {
+                pthread_mutex_unlock(&(_instance->m_lockUpdate));
+                usleep(200000); // sleep 200ms in deep sleep to avoid spinning while holding the lock
+                pthread_mutex_lock(&(_instance->m_lockUpdate));
+            }
+        }
 		pthread_mutex_unlock(&(_instance->m_lockUpdate));
-	        LOGINFO("%s: Thread exited", __FUNCTION__);
-	}
+	    LOGINFO("%s: Thread exited", __FUNCTION__);     
+        
+    }
 
 
     void  HdmiCecSourceImplementation::sendDeviceUpdateInfo(const int logicalAddress)
@@ -1740,6 +1861,9 @@ namespace WPEFramework
                (*index)->OnKeyReleaseEvent(logicalAddress);
                index++;
            }
+           
+           // Key release is now handled by the short duration (200ms) set in SendKeyPressMsgEvent
+           LOGINFO("Received key release event from logical address: %d", logicalAddress);
        }
 
     void HdmiCecSourceImplementation::SendKeyPressMsgEvent(const int logicalAddress,const int keyCode)
@@ -1749,7 +1873,112 @@ namespace WPEFramework
                 (*index)->OnKeyPressEvent(logicalAddress,keyCode);
                 index++;
               }
+           
+           // Send key press event to uinput via Tools plugin
+           if (_toolsPlugin == nullptr) {
+               // Lazy initialization - try to connect if not already connected
+               if (_service != nullptr) {
+                   initializeToolsPlugin(_service);
+               }
+           }
+           
+           if (_toolsPlugin) {
+               uint32_t linuxKeyCode = mapCECKeyToLinuxKeyCode(keyCode);
+               if (linuxKeyCode != 0xFF) {  // KEY_UNSUPPORTED
+                   std::vector<Exchange::RemoteKey> remoteKeys;
+                   Exchange::RemoteKey key;
+                   key.code = static_cast<Exchange::RemoteKeyCode>(linuxKeyCode);
+                   key.duration = 0.2;  // Set to 200ms instead of default 16s
+                   key.delay = 0;
+                   remoteKeys.push_back(key);
+                   
+                   bool success = false;
+                   Core::hresult result = _toolsPlugin->GenerateRemoteKeys(remoteKeys, success);
+                   if (result == Core::ERROR_NONE && success) {
+                       LOGINFO("Successfully sent CEC key 0x%x (Linux key 0x%x) with 200ms duration to uinput via Tools plugin", keyCode, linuxKeyCode);
+                   } else {
+                       LOGWARN("Failed to send CEC key 0x%x to uinput: result=%u, success=%d", keyCode, result, success);
+                   }
+               } else {
+                   LOGINFO("Unsupported CEC key code: 0x%x", keyCode);
+               }
+           } else {
+               LOGDBG("Tools plugin not available, CEC key event 0x%x not injected to uinput", keyCode);
+           }
        }
+
+    uint32_t HdmiCecSourceImplementation::mapCECKeyToLinuxKeyCode(const int cecKeyCode)
+    {
+        // Map CEC UI Command codes to Linux key codes
+        // Based on CEC spec and common remote control mappings
+        switch (cecKeyCode) {
+            // Numeric keys
+            case 0x20: return KEY_0;       // 0
+            case 0x21: return KEY_1;       // 1
+            case 0x22: return KEY_2;       // 2
+            case 0x23: return KEY_3;       // 3
+            case 0x24: return KEY_4;       // 4
+            case 0x25: return KEY_5;       // 5
+            case 0x26: return KEY_6;       // 6
+            case 0x27: return KEY_7;       // 7
+            case 0x28: return KEY_8;       // 8
+            case 0x29: return KEY_9;       // 9
+            
+            // Navigation keys
+            case 0x01: return KEY_UP;      // UP
+            case 0x02: return KEY_DOWN;    // DOWN
+            case 0x03: return KEY_LEFT;    // LEFT
+            case 0x04: return KEY_RIGHT;   // RIGHT
+            case 0x00: return KEY_ENTER;   // SELECT
+            
+            // Media control keys
+            case 0x41: return KEY_KPPLUS;     // VOLUME_UP
+            case 0x42: return KEY_KPMINUS;    // VOLUME_DOWN
+            case 0x43: return KEY_KPASTERISK; // MUTE
+            case 0x44: return KEY_UNKNOWN;    // RESTORE_VOLUME_FUNCTION
+            
+            // Playback control keys
+            case 0x45: return KEY_PLAY;    // PLAY
+            case 0x46: return KEY_STOP;    // STOP
+            case 0x47: return KEY_PAUSE;   // PAUSE
+            case 0x48: return KEY_F12;     // RECORD
+            case 0x49: return KEY_REWIND;  // REWIND
+            case 0x4A: return KEY_FASTFORWARD; // FAST FORWARD
+            case 0x4B: return KEY_EJECTCD; // EJECT
+            
+            // Menu keys
+            case 0x09: return KEY_HOME;    // HOME
+            case 0x0D: return KEY_ESC;     // BACK
+            case 0x0F: return KEY_MENU;    // MENU
+            case 0x51: return KEY_SETUP;   // SETUP_MENU
+            
+            // TV power
+            case 0x0C: return KEY_TV;      // TV
+            case 0x6D: return KEY_POWER;   // POWER
+            
+            // Function keys
+            case 0x32: return KEY_F9;      // INFO
+            case 0x37: return KEY_PAGEUP;  // PAGE_UP
+            case 0x38: return KEY_PAGEDOWN;// PAGE_DOWN
+            
+            // Colored buttons (often mapped to F keys)
+            case 0x6E: return KEY_F4;      // RED
+            case 0x6F: return KEY_F5;      // GREEN
+            case 0x70: return KEY_F6;      // YELLOW
+            case 0x71: return KEY_F7;      // BLUE
+            
+            // Extra keys
+            case 0x1A: return KEY_PREVIOUS; // PREVIOUS
+            case 0x1B: return KEY_NEXT;     // NEXT
+            case 0x1C: return KEY_F3;       // SEARCH
+            case 0x76: return KEY_VOLUMEUP;
+            case 0x77: return KEY_VOLUMEDOWN;
+            
+            default:
+                LOGDBG("Unmapped CEC key code: 0x%x", cecKeyCode);
+                return 0xFF;  // KEY_UNSUPPORTED or similar value to indicate unmapped key
+        }
+    }
 
     } // namespace Plugin
 } // namespace WPEFramework

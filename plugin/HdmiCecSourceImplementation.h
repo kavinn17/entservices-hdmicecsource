@@ -42,6 +42,8 @@
 #include <interfaces/IPowerManager.h>
 #include "PowerManagerInterface.h"
 #include <interfaces/IHdmiCecSource.h>
+#include <interfaces/ITools.h>
+#include <core/core.h>
 #include "host.hpp"
 
 
@@ -188,6 +190,7 @@ namespace WPEFramework {
             virtual ~HdmiCecSourceImplementation();
             virtual void OnDisplayHDMIHotPlug(dsDisplayEvent_t displayEvent) override;
             void onPowerModeChanged(const PowerState currentState, const PowerState newState);
+            void resumeCecStack();
             void registerEventHandlers();
             static HdmiCecSourceImplementation* _instance;
             CECDeviceInfo_2 deviceList[16];
@@ -312,9 +315,15 @@ namespace WPEFramework {
             static void threadCecStatusUpdateHandler(int data);
             uint32_t sendKeyPressEvent(const int logicalAddress, int keyCode);
             int getUIKeyCode(int keyCode);
+            uint32_t mapCECKeyToLinuxKeyCode(const int cecKeyCode);
+            void initializeToolsPlugin(PluginHost::IShell* service);
             PowerManagerInterfaceRef _powerManagerPlugin;
             Core::Sink<PowerManagerNotification> _pwrMgrNotification;
             bool _registeredEventHandlers;
+            Exchange::ITools* _toolsPlugin;
+            mutable std::mutex _toolsPluginLock;
+            PluginHost::IShell* _service;
+            
             private:
                 mutable Core::CriticalSection _adminLock;
                 std::list<Exchange::IHdmiCecSource::INotification*> _hdmiCecSourceNotifications;

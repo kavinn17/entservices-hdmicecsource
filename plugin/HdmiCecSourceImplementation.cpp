@@ -68,16 +68,25 @@
 #define CEC_SETTING_OSD_NAME "cecOSDName"
 #define CEC_SETTING_VENDOR_ID "cecVendorId"
 
+
+#include <atomic>
+
+enum {
+    DEVICE_POWER_STATE_ON = 0,
+    DEVICE_POWER_STATE_OFF = 1
+};
+
 static std::vector<uint8_t> defaultVendorId = {0x00,0x19,0xFB};
 static VendorID appVendorId = {defaultVendorId.at(0),defaultVendorId.at(1),defaultVendorId.at(2)};
 static VendorID lgVendorId = {0x00,0xE0,0x91};
 static PhysicalAddress physical_addr = {0x0F,0x0F,0x0F,0x0F};
 static LogicalAddress logicalAddress = 0xF;
 static OSDName osdName = "TV Box";
-static int32_t powerState = 1;
+static std::atomic<int32_t> powerState{DEVICE_POWER_STATE_OFF};
 static PowerStatus tvPowerState(PowerStatus::POWER_STATUS_NOT_KNOWN);
 static bool isDeviceActiveSource = false;
 static bool isLGTvConnected = false;
+static std::atomic<PowerState> devicePowerState{WPEFramework::Exchange::IPowerManager::POWER_STATE_ON};
 
 #define KEY_UNSUPPORTED 0xFF
 
@@ -286,7 +295,7 @@ namespace WPEFramework
        {
              try
              { 
-                 conn.sendTo(header.from, MessageEncoder().encode(ReportPowerStatus(PowerStatus(powerState))));
+                 conn.sendTo(header.from, MessageEncoder().encode(ReportPowerStatus(PowerStatus(powerState.load()))));
              } 
              catch(...)
              {
@@ -449,8 +458,9 @@ namespace WPEFramework
                  res = _powerManagerPlugin->GetPowerState(pwrStateCur, pwrStatePrev);
                  if (Core::ERROR_NONE == res)
                  {
-                     powerState = (pwrStateCur == WPEFramework::Exchange::IPowerManager::POWER_STATE_ON)?0:1 ;
-                     LOGINFO("Current state is PowerManagerPlugin: (%d) powerState :%d \n",pwrStateCur,powerState);
+                      devicePowerState.store(pwrStateCur);
+                      powerState.store((pwrStateCur == WPEFramework::Exchange::IPowerManager::POWER_STATE_ON)?DEVICE_POWER_STATE_ON:DEVICE_POWER_STATE_OFF);
+                      LOGINFO("Current state is PowerManagerPlugin: (%d) powerState :%d \n",pwrStateCur,powerState.load());
                  }
              }
 
@@ -789,14 +799,44 @@ namespace WPEFramework
 
             LOGINFO("Event IARM_BUS_PWRMGR_EVENT_MODECHANGED: State Changed %d -- > %d\r",
                     currentState, newState);
+            devicePowerState.store(newState);
             if (WPEFramework::Exchange::IPowerManager::POWER_STATE_ON == newState)
             {
-                powerState = 0;
-                HdmiCecSourceImplementation::_instance->getLogicalAddress(); // get the updated LA after wakeup
+                powerState.store(DEVICE_POWER_STATE_ON);
+                resumeCecStack();
             }
             else
-                powerState = 1;
+                powerState.store(DEVICE_POWER_STATE_OFF);
+
+            if (cecEnableStatus) {
+                pthread_mutex_lock(&m_lock);
+                pthread_cond_signal(&m_condSig);
+                pthread_mutex_unlock(&m_lock);
+            }
        }
+
+       void HdmiCecSourceImplementation::resumeCecStack()
+        {
+            try {
+                getLogicalAddress();
+                if(cecEnableStatus){
+                    if (smConnection && logicalAddress.toInt() != LogicalAddress::UNREGISTERED) {
+                        // Re-announce physical address and vendor ID on bus
+                        smConnection->sendTo(LogicalAddress(LogicalAddress::BROADCAST),
+                            MessageEncoder().encode(
+                                ReportPhysicalAddress(physical_addr, logicalAddress.toInt())));
+                        smConnection->sendTo(LogicalAddress(LogicalAddress::BROADCAST),
+                            MessageEncoder().encode(DeviceVendorID(
+                                isLGTvConnected ? lgVendorId : appVendorId)));
+                        // Refresh TV power status
+                        smConnection->sendTo(LogicalAddress::TV,
+                            MessageEncoder().encode(GiveDevicePowerStatus()));
+                    }
+                }
+            } catch (...) {
+                LOGWARN("CEC resume stack revalidation failed — will retry on next hot-plug");
+            }
+        }
 
        void HdmiCecSourceImplementation::onHdmiHotPlug(int connectStatus)
        {
@@ -1581,21 +1621,32 @@ namespace WPEFramework
 		int i = 0;
 		pthread_mutex_lock(&(_instance->m_lock));//pthread_cond_wait should be mutex protected. //pthread_cond_wait will unlock the mutex and perfoms wait for the condition.
 		while (!_instance->m_pollThreadExit) {
-			bool isActivateUpdateThread = false;
-			LOGINFO("Starting cec device polling");
-			for(i=0; i< LogicalAddress::UNREGISTERED; i++ ) {
-				bool isConnected = _instance->pingDeviceUpdateList(i);
-				if (isConnected){
-					isActivateUpdateThread = isConnected;
-				}
+            if(!(WPEFramework::Exchange::IPowerManager::POWER_STATE_STANDBY_DEEP_SLEEP == devicePowerState.load())){
+			    bool isActivateUpdateThread = false;
+			    LOGINFO("Starting cec device polling");
+			    for(i=0; i< LogicalAddress::UNREGISTERED; i++ ) {
+			    	bool isConnected = _instance->pingDeviceUpdateList(i);
+			    	if (isConnected){
+			    		isActivateUpdateThread = isConnected;
+			    	}
+                    if(_instance->m_pollThreadExit || (WPEFramework::Exchange::IPowerManager::POWER_STATE_STANDBY_DEEP_SLEEP == devicePowerState.load()))
+                    {
+                        break;
+                    }
 
-			}
-			if (isActivateUpdateThread){
-				//i any of devices is connected activate thread update check
-				pthread_cond_signal(&(_instance->m_condSigUpdate));
-			}
-			//Wait for mutex signal here to continue the worker thread again.
-			pthread_cond_wait(&(_instance->m_condSig), &(_instance->m_lock));
+			    }
+			    if (isActivateUpdateThread){
+			    	//i any of devices is connected activate thread update check
+			    	pthread_cond_signal(&(_instance->m_condSigUpdate));
+			    }
+			    //Wait for mutex signal here to continue the worker thread again.
+			    pthread_cond_wait(&(_instance->m_condSig), &(_instance->m_lock));
+            }
+            else{
+                pthread_mutex_unlock(&(_instance->m_lock));
+                usleep(200000); //sleep for 200 milli sec
+                pthread_mutex_lock(&(_instance->m_lock));
+            }
 
 		}
 		pthread_mutex_unlock(&(_instance->m_lock));
@@ -1610,32 +1661,37 @@ namespace WPEFramework
 
             while(!_instance->m_sendKeyEventThreadExit)
             {
-                keyInfo.logicalAddr = -1;
-                keyInfo.keyCode = -1;
+                if(!(WPEFramework::Exchange::IPowerManager::POWER_STATE_STANDBY_DEEP_SLEEP == devicePowerState.load()))
                 {
+                    keyInfo.logicalAddr = -1;
+                    keyInfo.keyCode = -1;
                     // Wait for a message to be added to the queue
                     std::unique_lock<std::mutex> lk(_instance->m_sendKeyEventMutex);
                     _instance->m_sendKeyCV.wait(lk, []{return (_instance->m_sendKeyEventThreadRun == true);});
-                }
 
-                if (_instance->m_sendKeyEventThreadExit == true)
+                    if (_instance->m_sendKeyEventThreadExit == true)
+                    {
+                        LOGINFO(" threadSendKeyEvent Exiting");
+                        _instance->m_sendKeyEventThreadRun = false;
+                        break;
+                    }
+
+                    if (_instance->m_SendKeyQueue.empty()) {
+                        _instance->m_sendKeyEventThreadRun = false;
+                        continue;
+                    }
+
+                    keyInfo = _instance->m_SendKeyQueue.front();
+                    _instance->m_SendKeyQueue.pop();
+
+                    LOGINFO("sendRemoteKeyThread : logical addr:0x%x keyCode: 0x%x  queue size :%d \n",keyInfo.logicalAddr,keyInfo.keyCode,(int)_instance->m_SendKeyQueue.size());
+    	            _instance->sendKeyPressEvent(keyInfo.logicalAddr,_instance->getUIKeyCode(keyInfo.keyCode));
+	                _instance->sendKeyReleaseEvent(keyInfo.logicalAddr);
+                }
+                else
                 {
-                    LOGINFO(" threadSendKeyEvent Exiting");
-                    _instance->m_sendKeyEventThreadRun = false;
-                    break;
+                    usleep(200000); //sleep for 200 milli sec
                 }
-
-                if (_instance->m_SendKeyQueue.empty()) {
-                    _instance->m_sendKeyEventThreadRun = false;
-                    continue;
-                }
-
-                keyInfo = _instance->m_SendKeyQueue.front();
-                _instance->m_SendKeyQueue.pop();
-                
-                LOGINFO("sendRemoteKeyThread : logical addr:0x%x keyCode: 0x%x  queue size :%d \n",keyInfo.logicalAddr,keyInfo.keyCode,(int)_instance->m_SendKeyQueue.size());
-    	        _instance->sendKeyPressEvent(keyInfo.logicalAddr,_instance->getUIKeyCode(keyInfo.keyCode));
-	            _instance->sendKeyReleaseEvent(keyInfo.logicalAddr);
 
             }
 	    LOGINFO("%s: Thread exited", __FUNCTION__);
@@ -1650,58 +1706,71 @@ namespace WPEFramework
 		int i = 0;
 		pthread_mutex_lock(&(_instance->m_lockUpdate));//pthread_cond_wait should be mutex protected. //pthread_cond_wait will unlock the mutex and perfoms wait for the condition.
 		while (!_instance->m_updateThreadExit) {
-			//Wait for mutex signal here to continue the worker thread again.
-			pthread_cond_wait(&(_instance->m_condSigUpdate), &(_instance->m_lockUpdate));
+            if(!(WPEFramework::Exchange::IPowerManager::POWER_STATE_STANDBY_DEEP_SLEEP == devicePowerState.load()))
+            {
+		    	//Wait for mutex signal here to continue the worker thread again.
+		    	pthread_cond_wait(&(_instance->m_condSigUpdate), &(_instance->m_lockUpdate));
 
-			LOGINFO("Starting cec device update check");
-			for(i=0; ((i< LogicalAddress::UNREGISTERED)&&(!_instance->m_updateThreadExit)); i++ ) {
-				//If details are not updated. update now.
-				if (BIT_CHECK(HdmiCecSourceImplementation::_instance->deviceList[i].m_deviceInfoStatus, BIT_DEVICE_PRESENT))
-				{
-					int itr = 0;
-					bool retry = true;
-					int iCounter = 0;
-					for (itr = 0; ((itr<5)&&(retry)); itr++){
+		    	LOGINFO("Starting cec device update check");
+		    	for(i=0; ((i< LogicalAddress::UNREGISTERED)&&(!_instance->m_updateThreadExit)); i++ ) {
+		    		//If details are not updated. update now.
+		    		if (BIT_CHECK(HdmiCecSourceImplementation::_instance->deviceList[i].m_deviceInfoStatus, BIT_DEVICE_PRESENT))
+		    		{
+		    			int itr = 0;
+		    			bool retry = true;
+		    			int iCounter = 0;
+		    			for (itr = 0; ((itr<5)&&(retry)); itr++){
 
-						if (!HdmiCecSourceImplementation::_instance->deviceList[i].m_isOSDNameUpdated){
-							iCounter = 0;
-							while ((!_instance->m_updateThreadExit) && (iCounter < (2*10))) { //sleep for 2sec.
-								/* Delay allows CEC device response time as per HDMI-CEC specification before requesting OSD name */
-								/* coverity[sleep : FALSE] */
-								usleep (100 * 1000); //sleep for 100 milli sec
-								iCounter ++;
-							}
+		    				if (!HdmiCecSourceImplementation::_instance->deviceList[i].m_isOSDNameUpdated){
+		    					iCounter = 0;
+		    					while ((!_instance->m_updateThreadExit) && (iCounter < (2*10))) { //sleep for 2sec.
+		    						/* Delay allows CEC device response time as per HDMI-CEC specification before requesting OSD name */
+		    						/* coverity[sleep : FALSE] */
+		    						usleep (100 * 1000); //sleep for 100 milli sec
+		    						iCounter ++;
+		    					}
 
-							HdmiCecSourceImplementation::_instance->requestOsdName (i);
-							retry = true;
+		    					HdmiCecSourceImplementation::_instance->requestOsdName (i);
+		    					retry = true;
+		    				}
+		    				else {
+		    					retry = false;
+		    				}
+
+		    				if (!HdmiCecSourceImplementation::_instance->deviceList[i].m_isVendorIDUpdated){
+		    					iCounter = 0;
+		    					while ((!_instance->m_updateThreadExit) && (iCounter < (2*10))) { //sleep for 2sec.
+		    						/* Delay allows CEC device response time as per HDMI-CEC specification before requesting vendor ID */
+		    						/* coverity[sleep : FALSE] */
+		    						usleep (100 * 1000); //sleep for 100 milli sec
+		    						iCounter ++;
+		    					}
+
+		    					HdmiCecSourceImplementation::_instance->requestVendorID (i);
+		    					retry = true;
+		    				}
+
+                            if(_instance->m_updateThreadExit)
+                            {
+                                break;
+                            }
+		    			}
+						if (retry) {
+							LOGINFO("cec device: %d update time out", i);
 						}
-						else {
-							retry = false;
-						}
-
-						if (!HdmiCecSourceImplementation::_instance->deviceList[i].m_isVendorIDUpdated){
-							iCounter = 0;
-							while ((!_instance->m_updateThreadExit) && (iCounter < (2*10))) { //sleep for 2sec.
-								/* Delay allows CEC device response time as per HDMI-CEC specification before requesting vendor ID */
-								/* coverity[sleep : FALSE] */
-								usleep (100 * 1000); //sleep for 100 milli sec
-								iCounter ++;
-							}
-
-							HdmiCecSourceImplementation::_instance->requestVendorID (i);
-							retry = true;
-						}
-					}
-					if (retry){
-						LOGINFO("cec device: %d update time out", i);
-					}
-				}
-			}
-
-		}
+                    } 
+		        }
+            }
+            else {
+                pthread_mutex_unlock(&(_instance->m_lockUpdate));
+                usleep(200000); // sleep 200ms in deep sleep to avoid spinning while holding the lock
+                pthread_mutex_lock(&(_instance->m_lockUpdate));
+            }
+        }
 		pthread_mutex_unlock(&(_instance->m_lockUpdate));
-	        LOGINFO("%s: Thread exited", __FUNCTION__);
-	}
+	    LOGINFO("%s: Thread exited", __FUNCTION__);     
+        
+    }
 
 
     void  HdmiCecSourceImplementation::sendDeviceUpdateInfo(const int logicalAddress)
